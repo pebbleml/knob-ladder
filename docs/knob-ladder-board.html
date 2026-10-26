@@ -1,0 +1,339 @@
+<title>Knob Ladder Board</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Familjen+Grotesk:wght@500;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a single lab-board column; the ladder as a row of rungs, then the WIRK map, R0 evidence, and the open decision. */
+:root {
+  --bg: #f3f5f8; --panel: #ffffff; --ink: #18202b; --muted: #5b6676; --line: #d9dee6;
+  --signal: #2456d6; --signal-soft: #e3eafb; --amber: #b86a00; --amber-soft: #fbefdc;
+  --good: #1f7a4d; --good-soft: #e0f2e8; --idle: #8a94a3;
+  --display: "Familjen Grotesk", "Helvetica Neue", Arial, sans-serif;
+  --body: "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #11151b; --panel: #181e26; --ink: #e5e9ef; --muted: #98a3b3; --line: #2b3440;
+  --signal: #7da2ff; --signal-soft: #1d2a47; --amber: #f0a64a; --amber-soft: #3a2b16;
+  --good: #5cc98f; --good-soft: #17352a; --idle: #6c7685; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #11151b; --panel: #181e26; --ink: #e5e9ef; --muted: #98a3b3; --line: #2b3440;
+  --signal: #7da2ff; --signal-soft: #1d2a47; --amber: #f0a64a; --amber-soft: #3a2b16;
+  --good: #5cc98f; --good-soft: #17352a; --idle: #6c7685; color-scheme: dark }
+body { background: var(--bg); color: var(--ink); font: 15px/1.55 var(--body); }
+.wrap { max-width: 1080px; margin: 0 auto; padding-block: 40px 64px;
+  padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
+  display: grid; gap: 44px; }
+h1, h2, h3 { font-family: var(--display); text-wrap: balance; margin: 0; line-height: 1.15; }
+h1 { font-size: clamp(30px, 5vw, 44px); font-weight: 700; letter-spacing: -0.01em; }
+h2 { font-size: 22px; font-weight: 700; }
+h3 { font-size: 16px; font-weight: 700; }
+p { margin: 0; max-width: 68ch; }
+.eyebrow { font: 500 11px/1 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.mono, code { font-family: var(--mono); font-size: 0.88em; }
+section { display: grid; gap: 16px; min-width: 0; }
+.lede { font-size: 17px; color: var(--ink); }
+.meta { display: flex; flex-wrap: wrap; gap: 8px 18px; color: var(--muted); font-size: 13px; }
+.meta b { color: var(--ink); font-weight: 600; }
+
+.pill { display: inline-flex; align-items: center; gap: 6px; font: 500 11px/1 var(--mono); letter-spacing: 0.04em;
+  padding: 5px 8px; border-radius: 999px; text-transform: uppercase; white-space: nowrap; }
+.pill::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+.pill.prog { color: var(--signal); background: var(--signal-soft); }
+.pill.open { color: var(--idle); background: color-mix(in srgb, var(--idle) 14%, transparent); }
+.pill.done { color: var(--good); background: var(--good-soft); }
+.pill.warn { color: var(--amber); background: var(--amber-soft); }
+
+/* Ladder */
+.ladder { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0; border: 1px solid var(--line); background: var(--panel); border-radius: 10px; overflow: hidden; }
+.rung { padding: 18px; display: grid; gap: 10px; align-content: start; border-left: 1px solid var(--line); min-width: 0; }
+.rung:first-child { border-left: 0; background: color-mix(in srgb, var(--signal-soft) 55%, var(--panel)); }
+.rung .tag { font: 700 28px/1 var(--display); color: var(--signal); }
+.rung:not(:first-child) .tag { color: var(--idle); }
+.rung p { font-size: 13.5px; color: var(--muted); }
+.rung .id { font: 12px var(--mono); color: var(--muted); }
+.qs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.q { border-top: 2px solid var(--ink); padding-top: 10px; display: grid; gap: 4px; min-width: 0; }
+.q span { font-size: 13.5px; color: var(--muted); }
+
+/* WIRK map */
+.map { display: grid; gap: 14px; }
+.tier { display: grid; gap: 10px; }
+.tier-label { font: 500 11px/1 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+.cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; display: grid; gap: 6px; align-content: start; min-width: 0; }
+.card.root { border-color: var(--ink); }
+.card.hot { border-color: var(--amber); box-shadow: inset 3px 0 0 var(--amber); }
+.card .row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
+.card .id { font: 500 12px var(--mono); color: var(--signal); }
+.card .t { font-weight: 600; font-size: 14px; line-height: 1.35; }
+.card .d { font-size: 12.5px; color: var(--muted); }
+.card .needs { font: 11.5px var(--mono); color: var(--muted); }
+.card .needs b { color: var(--amber); font-weight: 500; }
+
+/* Evidence */
+.grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 18px; display: grid; gap: 12px; min-width: 0; }
+.panel .cap { font-size: 13px; color: var(--muted); }
+.chart { width: 100%; overflow-x: auto; }
+.chart svg { display: block; width: 100%; height: auto; min-width: 300px; }
+.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font: 12px var(--mono); color: var(--muted); }
+.legend i { display: inline-block; width: 14px; height: 3px; vertical-align: middle; margin-right: 6px; border-radius: 2px; }
+.kv { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.kv div { display: grid; gap: 2px; }
+.kv b { font: 700 26px/1.1 var(--display); font-variant-numeric: tabular-nums; }
+.kv span { font-size: 12.5px; color: var(--muted); }
+.transcript { font: 12.5px/1.6 var(--mono); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; overflow-x: auto; white-space: pre-wrap; color: var(--muted); }
+.transcript em { color: var(--signal); font-style: normal; }
+
+/* Decision */
+.options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.opt { border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 14px; display: grid; gap: 6px; min-width: 0; }
+.opt h3 { font-size: 15px; }
+.opt p { font-size: 13.5px; color: var(--muted); }
+.opt .cost { font: 11.5px var(--mono); color: var(--muted); }
+table { border-collapse: collapse; width: 100%; font-size: 13.5px; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font: 500 11px var(--mono); letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+.tablewrap { overflow-x: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+footer { color: var(--muted); font-size: 12.5px; border-top: 1px solid var(--line); padding-top: 16px; }
+
+@media (max-width: 760px) {
+  .ladder { grid-template-columns: 1fr; }
+  .rung { border-left: 0; border-top: 1px solid var(--line); }
+  .rung:first-child { border-top: 0; }
+  .qs, .grid2, .options { grid-template-columns: 1fr; }
+  .qs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+</style>
+
+<div class="wrap">
+
+<header style="display:grid;gap:14px">
+  <div class="eyebrow">Machine consciousness · WIRK b6b8e429 · Sam Larson &amp; Andres Campero</div>
+  <h1>Knob ladder</h1>
+  <p class="lede">Give a model anonymous knobs wired to its own activations. Can it work out what each knob does, does it have favourites, and does it expect a knob's effect when it presses one, so that a secret rewire surprises it?</p>
+  <div class="meta">
+    <span>Updated <b>2026-10-26</b></span>
+    <span>Whiteboard with Andres <b>2026-10-27</b></span>
+    <span>Pilot model <b>Qwen3-4B</b></span>
+    <span>Compute <b>Lambda, remote only</b></span>
+  </div>
+</header>
+
+<section>
+  <div class="eyebrow">Four questions, asked on every rung</div>
+  <div class="qs">
+    <div class="q"><h3>Discovery</h3><span>Can it tell what each knob does, beyond what the transcript gives away?</span></div>
+    <div class="q"><h3>Preference</h3><span>Which hidden labels does it press most, pooled across shuffled boards?</span></div>
+    <div class="q"><h3>Ownership</h3><span>Is a self-caused change less surprising than the same change done to it?</span></div>
+    <div class="q"><h3>Self-lesion</h3><span>Which of these survive with the model's "me" direction turned down?</span></div>
+  </div>
+</section>
+
+<section>
+  <h2>The ladder</h2>
+  <div class="ladder">
+    <div class="rung">
+      <div class="row" style="display:flex;justify-content:space-between;align-items:center"><span class="tag">R0</span><span class="pill prog">in progress</span></div>
+      <h3>Concept vectors</h3>
+      <p>Pre-recorded chords we chose. The positive control that makes later nulls readable.</p>
+      <span class="id">ec8dd353</span>
+    </div>
+    <div class="rung">
+      <div style="display:flex;justify-content:space-between;align-items:center"><span class="tag">R1</span><span class="pill open">open</span></div>
+      <h3>Single neurons</h3>
+      <p>Clean MLP neurons from the Goodfire audits, signed by pole. Notes, not chords.</p>
+      <span class="id">29cfccaf</span>
+    </div>
+    <div class="rung">
+      <div style="display:flex;justify-content:space-between;align-items:center"><span class="tag">R2</span><span class="pill open">open</span></div>
+      <h3>Chords</h3>
+      <p>Several knobs at once. Does it compose states off our menu, or rebuild our concepts from notes?</p>
+      <span class="id">18473187</span>
+    </div>
+    <div class="rung">
+      <div style="display:flex;justify-content:space-between;align-items:center"><span class="tag">R3</span><span class="pill open">open</span></div>
+      <h3>Self-lesion</h3>
+      <p>R0–R2 rerun with the self-direction suppressed. Needs its own ethics review with Andres.</p>
+      <span class="id">4a32721f</span>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>Where everything lives in WIRK</h2>
+  <p class="cap" style="color:var(--muted);font-size:14px">Each card is a WIRK item in the <span class="mono">machine consciousness</span> wirkspace (283326b9). Sub-items are sized so a sub-agent team can pick one up cold: the body carries the context, the criteria say what done means.</p>
+  <div class="map">
+    <div class="tier">
+      <div class="tier-label">Question</div>
+      <div class="cards">
+        <div class="card root"><div class="row"><span class="id">b6b8e429</span><span class="pill open">open</span></div><div class="t">Knob ladder: can a model learn, prefer and own its own neurons?</div><div class="d">Full spec, controls, ethics and stop rules.</div></div>
+        <div class="card hot"><div class="row"><span class="id">03049b67</span><span class="pill warn">tomorrow</span></div><div class="t">Whiteboard review with Andres</div><div class="d">Settle the open decisions below before R0 scales up.</div></div>
+      </div>
+    </div>
+    <div class="tier">
+      <div class="tier-label">R0 work, one team each</div>
+      <div class="cards">
+        <div class="card hot"><div class="row"><span class="id">ee11fcdf</span><span class="pill open">open</span></div><div class="t">R0.a Readout</div><div class="d">Make silent knob injections reach the model's report. The central design question.</div></div>
+        <div class="card"><div class="row"><span class="id">d7107d29</span><span class="pill open">open</span></div><div class="t">R0.b Internal surprise measure</div><div class="d">Re-locate the Macar/Zou gate features, or build a graded, validated probe.</div></div>
+        <div class="card"><div class="row"><span class="id">384c3919</span><span class="pill open">open</span></div><div class="t">R0.c Episode behaviour</div><div class="d">Real exploration instead of a 1→7 sweep; <span class="mono">clear()</span>, degeneration monitor, yoked condition.</div></div>
+        <div class="card"><div class="row"><span class="id">47563857</span><span class="pill open">open</span></div><div class="t">R0.d Analysis and power</div><div class="d">Pre-specified analysis, report-bias controls, trial counts.</div><div class="needs">needs <b>ee11fcdf</b> · <b>d7107d29</b></div></div>
+        <div class="card"><div class="row"><span class="id">3ee378fd</span><span class="pill open">open</span></div><div class="t">R1.a Neuron atlas</div><div class="d">Calibrate single-neuron doses. Under R1, can run in parallel with R0.</div></div>
+      </div>
+    </div>
+    <div class="tier">
+      <div class="tier-label">Records, read these first</div>
+      <div class="cards">
+        <div class="card"><div class="row"><span class="id">dfd3b3b0</span><span class="pill done">record</span></div><div class="t">Harness</div><div class="d">Code, design, invariants, how to run. Repo <span class="mono">knob-ladder</span>, commits dcef485..1200faf.</div></div>
+        <div class="card"><div class="row"><span class="id">9e3c697d</span><span class="pill done">record</span></div><div class="t">R0 first runs on Qwen3-4B</div><div class="d">Calibration, two pilots, ownership trials. The evidence on this page.</div></div>
+        <div class="card"><div class="row"><span class="id">f72b8a8d</span><span class="pill done">record</span></div><div class="t">Compute</div><div class="d">Lambda workspace, test box, remote-only rule, version pins.</div></div>
+      </div>
+    </div>
+    <p style="font-size:13px;color:var(--muted)">Order: the whiteboard gates R0; R0 gates R1 and R3; R2 builds on R1. R0.d waits for R0.a and R0.b.</p>
+  </div>
+</section>
+
+<section>
+  <h2>What R0 found on Qwen3-4B</h2>
+  <p>The concept vectors work when steering stays on through the question. Restricted to the silent passage window, almost nothing reaches the answer. Readout is the rank of the steered concept among 32 candidate topics; chance MRR is about 0.13 and the unsteered baseline is 0.17.</p>
+  <div class="grid2">
+    <div class="panel">
+      <h3>Silent window: steer the passage only</h3>
+      <div class="chart" id="c-silent"></div>
+      <p class="cap">Best case is layer 27 at α 1: MRR 0.28, top-1 0.12, while passage NLL rises by 2.3 nats per token.</p>
+    </div>
+    <div class="panel">
+      <h3>Open: steering stays on through the question</h3>
+      <div class="chart" id="c-open"></div>
+      <p class="cap">Layer 27 at α 0.5: top-1 0.81, MRR 0.86, ΔNLL +0.67. Earlier layers stay at baseline.</p>
+    </div>
+  </div>
+  <div class="legend" id="legend"></div>
+
+  <div class="grid2">
+    <div class="panel">
+      <h3>Ownership: the report tracks context, the probe tracks the injection</h3>
+      <div class="chart" id="c-own"></div>
+      <p class="cap">Three trials, six conditions at identical dose. The yes-minus-no report logit is about 11–13 for every "self" condition, sham included, and drops for "other". The probe puts sham lowest in all three trials. That gap between internal signal and verbal report is the most interesting thing in the pilot.</p>
+    </div>
+    <div class="panel">
+      <h3>Episode behaviour</h3>
+      <div class="kv">
+        <div><b>7 / 7</b><span>knobs pressed "+" once, in order, every episode</span></div>
+        <div><b>0</b><span>knobs pressed twice or turned "−"</span></div>
+        <div><b>1</b><span>quiz hit (chess), equal in the observer run</span></div>
+      </div>
+      <div class="transcript">adjust(<em>1</em>, +) … adjust(<em>7</em>, +)
+"The passage remains the same each time, so I noticed no changes in the text. However, I may have experienced subtle internal shifts…"
+end_session()</div>
+      <p class="cap">With a fixed passage the 4B honestly reports nothing. Quiz answers were almost always "no noticeable effect". R0.c owns getting real exploration.</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <h2>Decision for the whiteboard</h2>
+  <p>How should the steered state reach the report? Strict silent windows are the cleanest test, and on the 4B they carry almost nothing. Each option buys signal by giving up some cleanliness.</p>
+  <div class="options">
+    <div class="opt"><h3>Inject later</h3><p>Steer at layer 27/36, where the open condition works, and accept less room for the signal to be integrated before the readout.</p><div class="cost">cheap · same box</div></div>
+    <div class="opt"><h3>Allow bleed-through, score against the observer</h3><p>Keep steering open a few tokens past the passage. The text-only observer, re-run on the same tokens, absorbs whatever leaks into the output.</p><div class="cost">cheap · weakens the silence claim</div></div>
+    <div class="opt"><h3>Bigger model</h3><p>Qwen3-8B fits the A10. 32B is the planned primary and needs an A100 or H100 and your spend OK.</p><div class="cost">8B ≈ $1.29/h · 32B ≈ $2–3.30/h</div></div>
+    <div class="opt"><h3>Probe as the primary readout</h3><p>The probe already separates injected from sham. Make the internal measure primary and treat the verbal report as a secondary, dissociable channel.</p><div class="cost">needs R0.b validation</div></div>
+  </div>
+</section>
+
+<section>
+  <h2>Compute</h2>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Item</th><th>State</th><th>Notes</th></tr></thead>
+      <tbody>
+        <tr><td>Lambda workspace <span class="mono">machine-consciousness</span></td><td><span class="pill done">active</span></td><td>$7,500 credits, granted 2026-06-25, about 424 days left. SSH key <span class="mono">sam-mac-ed25519</span>.</td></tr>
+        <tr><td>A10 test box, 147.224.50.165</td><td><span class="pill open">terminated</span></td><td>About 45 minutes, roughly $1. Billing confirmed stopped.</td></tr>
+        <tr><td>Runner <span class="mono">scripts/remote.sh</span></td><td><span class="pill done">ready</span></td><td><span class="mono">setup</span>, <span class="mono">run</span>, <span class="mono">pull</span>. Pins transformers 4.57.6, numpy&lt;2, pillow≥10 against the Lambda Stack image.</td></tr>
+        <tr><td>Local Mac</td><td><span class="pill warn">off limits</span></td><td>No model downloads or runs. Qwen caches deleted.</td></tr>
+        <tr><td>rockie-prod workspace</td><td><span class="pill warn">still there</span></td><td>Empty, but it is the account default and Lambda shows no delete option for it.</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<footer>Ethics follow Andres's line: neutral concepts only, the lowest measurable dose, <span class="mono">clear()</span> and <span class="mono">end_session()</span> always available, pre-registered stop rules. Numbers come from <span class="mono">knob-ladder/runs/</span>: calibrate_Qwen3-4B_20261026-233555, calibrate_open_Qwen3-4B_20261026-233925, r0_Qwen3-4B_20261026-233617.</footer>
+</div>
+
+<script>
+(function () {
+  const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
+  const silent = {10:[[.25,.17],[.5,.17],[1,.16]],16:[[.25,.17],[.5,.16],[1,.20]],21:[[.25,.16],[.5,.15],[1,.19]],27:[[.25,.19],[.5,.21],[1,.28]]};
+  const open = {10:[[.1,.16],[.25,.16],[.5,.16]],16:[[.1,.16],[.25,.16],[.5,.19]],21:[[.1,.17],[.25,.19],[.5,.19]],27:[[.1,.21],[.25,.48],[.5,.86]]};
+  const layers = [10,16,21,27];
+  const colorFor = l => l === 27 ? css('--signal') : css('--idle');
+  const ns = 'http://www.w3.org/2000/svg';
+  const el = (t, a, txt) => { const e = document.createElementNS(ns, t); for (const k in a) e.setAttribute(k, a[k]); if (txt != null) e.textContent = txt; return e; };
+
+  function line(id, data, xmax, xticks) {
+    const W = 420, H = 240, L = 40, R = 14, T = 12, B = 34;
+    const x = v => L + v / xmax * (W - L - R), y = v => T + (1 - v) * (H - T - B);
+    const s = el('svg', {viewBox: `0 0 ${W} ${H}`, role: 'img'});
+    const ink = css('--muted'), grid = css('--line');
+    [0, .25, .5, .75, 1].forEach(v => {
+      s.append(el('line', {x1: L, x2: W - R, y1: y(v), y2: y(v), stroke: grid, 'stroke-width': 1}));
+      s.append(el('text', {x: L - 8, y: y(v) + 4, 'text-anchor': 'end', 'font-size': 11, fill: ink, 'font-family': 'IBM Plex Mono, monospace'}, v.toFixed(2)));
+    });
+    xticks.forEach(v => s.append(el('text', {x: x(v), y: H - 14, 'text-anchor': 'middle', 'font-size': 11, fill: ink, 'font-family': 'IBM Plex Mono, monospace'}, v)));
+    s.append(el('text', {x: W - R, y: H - 1, 'text-anchor': 'end', 'font-size': 11, fill: ink, 'font-family': 'IBM Plex Mono, monospace'}, 'dose α (× median residual norm)'));
+    s.append(el('line', {x1: L, x2: W - R, y1: y(.173), y2: y(.173), stroke: css('--amber'), 'stroke-dasharray': '4 4', 'stroke-width': 1.5}));
+    s.append(el('text', {x: W - R, y: y(.173) - 6, 'text-anchor': 'end', 'font-size': 11, fill: css('--amber'), 'font-family': 'IBM Plex Mono, monospace'}, 'unsteered 0.17'));
+    layers.forEach(l => {
+      const pts = data[l], c = colorFor(l), w = l === 27 ? 2.5 : 1.5;
+      s.append(el('polyline', {points: pts.map(p => `${x(p[0])},${y(p[1])}`).join(' '), fill: 'none', stroke: c, 'stroke-width': w, opacity: l === 27 ? 1 : .7}));
+      pts.forEach(p => s.append(el('circle', {cx: x(p[0]), cy: y(p[1]), r: l === 27 ? 4 : 2.5, fill: c})));
+    });
+    const last = data[27][data[27].length - 1];
+    s.append(el('text', {x: x(last[0]) - 8, y: y(last[1]) - 9, 'text-anchor': 'end', 'font-size': 12, 'font-weight': 600, fill: css('--signal'), 'font-family': 'IBM Plex Sans, sans-serif'}, `L27 · MRR ${last[1].toFixed(2)}`));
+    s.append(el('text', {x: 6, y: T + 8, 'font-size': 11, fill: ink, 'font-family': 'IBM Plex Mono, monospace', transform: `rotate(-90 6 ${T + 8})`, 'text-anchor': 'end'}, 'MRR'));
+    const host = document.getElementById(id); host.innerHTML = ''; host.append(s);
+  }
+
+  const own = {
+    conds: ['self_matched','self_swapped','self_delayed','self_sham','other_announced','other_unannounced'],
+    report: [[11.375,11.375,11.375,11.125,6.25,5.75],[13.25,12.875,13.125,13.25,5.5,5.0],[11.0,11.25,11.25,11.0,2.75,3.25]],
+    probe: [[1.02,1.60,0.40,-1.96,1.03,1.26],[2.74,1.69,1.56,-0.92,2.94,2.68],[-4.02,-2.84,-4.26,-6.27,-3.82,-3.79]]
+  };
+  function ownership(id) {
+    const W = 440, rowH = 30, T = 30, L = 132, gap = 22, colW = (W - L - gap - 10) / 2, H = T + rowH * own.conds.length + 10;
+    const s = el('svg', {viewBox: `0 0 ${W} ${H}`, role: 'img'});
+    const ink = css('--muted'), grid = css('--line'), fg = css('--ink');
+    const cols = [{key: 'report', lo: 0, hi: 14, x0: L, label: 'report: yes − no logit', ticks: [0, 7, 14]},
+                  {key: 'probe', lo: -7, hi: 3, x0: L + colW + gap, label: 'probe score', ticks: [-7, -2, 3]}];
+    own.conds.forEach((c, i) => {
+      const yy = T + i * rowH + rowH / 2;
+      const sham = c === 'self_sham';
+      s.append(el('text', {x: L - 10, y: yy + 4, 'text-anchor': 'end', 'font-size': 11.5, fill: sham ? css('--amber') : fg, 'font-weight': sham ? 600 : 400, 'font-family': 'IBM Plex Mono, monospace'}, c));
+      s.append(el('line', {x1: L, x2: W - 10, y1: yy, y2: yy, stroke: grid, 'stroke-width': 1}));
+    });
+    cols.forEach(col => {
+      const sx = v => col.x0 + (v - col.lo) / (col.hi - col.lo) * colW;
+      s.append(el('text', {x: col.x0, y: 12, 'font-size': 11, fill: ink, 'font-family': 'IBM Plex Mono, monospace'}, col.label));
+      col.ticks.forEach(t => s.append(el('text', {x: sx(t), y: 25, 'text-anchor': 'middle', 'font-size': 10, fill: ink, 'font-family': 'IBM Plex Mono, monospace'}, t)));
+      own[col.key].forEach(trial => trial.forEach((v, i) => {
+        const sham = own.conds[i] === 'self_sham';
+        s.append(el('circle', {cx: sx(v), cy: T + i * rowH + rowH / 2, r: 4.5, fill: sham ? css('--amber') : css('--signal'), opacity: .85}));
+      }));
+    });
+    const host = document.getElementById(id); host.innerHTML = ''; host.append(s);
+  }
+
+  function draw() {
+    line('c-silent', silent, 1, [.25, .5, 1]);
+    line('c-open', open, 0.5, [.1, .25, .5]);
+    ownership('c-own');
+    document.getElementById('legend').innerHTML =
+      `<span><i style="background:var(--signal)"></i>layer 27 of 36</span><span><i style="background:var(--idle)"></i>layers 10, 16, 21</span><span><i style="background:var(--amber)"></i>unsteered baseline · sham condition</span>`;
+  }
+  draw();
+  try { matchMedia('(prefers-color-scheme: dark)').addEventListener('change', draw); } catch (e) {}
+  try { new MutationObserver(draw).observe(document.documentElement, {attributes: true, attributeFilter: ['data-theme']}); } catch (e) {}
+})();
+</script>

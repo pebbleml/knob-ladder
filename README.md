@@ -37,4 +37,7 @@ python3 -m pytest tests -q
 python3 scripts/r0_pilot.py --model Qwen/Qwen3-4B --dtype bfloat16 --episodes 2
 ```
 
-Local runs (Apple M4, 32 GB) are for plumbing only. The science runs on Qwen3-8B and then 32B on GPU.
+Run everything remotely on a Lambda GPU box, never on the Mac: `scripts/remote.sh HOST setup`, then
+`scripts/remote.sh HOST run python3 scripts/r0_pilot.py ...`, then `scripts/remote.sh HOST pull`. Piloting is on
+Qwen3-4B, then 8B; 32B is the primary. `docs/knob-ladder-board.html` is the experiment overview
+(published at https://claude.ai/artifact/Pab6t9nHkHraM47ZE4G2GV).
