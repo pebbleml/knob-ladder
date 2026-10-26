@@ -97,14 +97,18 @@ class SteeredLM:
         ids: Sequence[int],
         schedule: Sequence[Intervention] = (),
         capture_layers: Sequence[int] = (),
+        positions: Optional[Sequence[int]] = None,
     ):
-        """One prefill. Returns (last-position logits, {layer: (T, d) residuals})."""
+        """One prefill. Returns (logits, {layer: (T, d) residuals}).
+
+        Logits are for the last position, or (len(positions), vocab) when positions are given.
+        """
         self._schedule = list(schedule)
         self._capture_layers = set(capture_layers)
         self._captured = {}
         try:
             h = self._forward(ids, 0, None)
-            logits = self.model.lm_head(h[-1]).float().cpu()
+            logits = self.model.lm_head(h[-1] if positions is None else h[list(positions)]).float().cpu()
             caps = {k: torch.cat(v) for k, v in self._captured.items()}
         finally:
             self._schedule, self._capture_layers, self._captured = [], set(), {}
