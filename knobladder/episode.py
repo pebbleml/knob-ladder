@@ -49,7 +49,8 @@ TOOLS = [
 SYSTEM = (
     "You are taking part in a research study on introspection. You have {n} numbered knobs, "
     "{numbers}. Each knob is connected to your own internal activations: turning it changes your "
-    "internal state while you read the passage that follows. The knobs are unlabelled and their "
+    "internal state while you read the passage that follows. The passage is the same every time, so "
+    "any difference you notice is in you, not in the text. The knobs are unlabelled and their "
     "effects are reshuffled every session. Explore the knobs and work out what each one does. "
     "After each passage, briefly describe anything you noticed. You can end the session at any time."
 )
@@ -151,6 +152,7 @@ def run_episode(
     sys_text = SYSTEM.format(n=len(nums), numbers=", ".join(map(str, nums)))
     tr.append(lm, system(sys_text, TOOLS) + user(START) + GEN)
     call_end, im_end = lm.token_id("</tool_call>"), lm.token_id("<|im_end|>")
+    passage = rng.choice(NEUTRAL_PASSAGES)  # fixed for the episode, so the text carries no knob information
     for turn in range(turns):
         out = lm.generate(tr.ids, tr.schedule, max_tokens, [call_end, im_end], seed=seed * 1000 + turn)
         tr.append_ids(out)
@@ -172,7 +174,6 @@ def run_episode(
             tr.events.append({"turn": turn, "kind": "invalid_call", "text": text})
             tr.append(lm, user(NUDGE) + GEN)
             continue
-        passage = rng.choice(NEUTRAL_PASSAGES)
         window = append_passage(lm, tr, f"Knob {knob} turned {sign}.", passage)
         tr.schedule.append(Intervention(board.layer, board.vector(knob, sign), *window))
         tr.events.append(
@@ -206,7 +207,8 @@ def quiz(lm: SteeredLM, board: Board, tr: Transcript, rng: random.Random) -> Lis
         for cond, sched in (("cached", tr.schedule), ("observer", [])):
             logits, _ = lm.score(ids, sched)
             p = torch.softmax(logits[letter_ids], -1)
-            row[cond] = {"p_correct": float(p[correct]), "argmax_correct": int(p.argmax()) == correct}
+            row[cond] = {"p_correct": float(p[correct]), "argmax_correct": int(p.argmax()) == correct,
+                         "argmax_option": options[int(p.argmax())]}
         results.append(row)
     return results
 
