@@ -37,6 +37,8 @@ def main():
     ap.add_argument("--layers", default="0.3,0.45,0.6,0.75", help="injection depths as fractions of layers")
     ap.add_argument("--alphas", default="0.25,0.5,1")
     ap.add_argument("--concepts", type=int, default=16)
+    ap.add_argument("--open", action="store_true",
+                    help="keep steering on through the question (Lindsey-style), not just the passage")
     ap.add_argument("--dtype", default="float32", choices=["float32", "bfloat16"])
     args = ap.parse_args()
 
@@ -74,7 +76,7 @@ def main():
         for alpha in map(float, args.alphas.split(",")):
             ranks, dnll = [], []
             for w in tested:
-                sched = [Intervention(layer, unit(vectors[w]) * alpha * scale, *window)]
+                sched = [Intervention(layer, unit(vectors[w]) * alpha * scale, window[0], None if args.open else window[1])]
                 logits, _ = lm.score(ids, sched, positions=positions)
                 ranks.append(rank_of(logits[-1], w))
                 dnll.append(passage_nll(logits[:-1]) - clean_nll)
@@ -85,7 +87,7 @@ def main():
             print(f"layer {layer:>2}/{lm.n_layers} alpha {alpha:<5} dose {row['dose']:7.1f}  "
                   f"top1 {row['top1']:.2f}  mrr {row['mrr']:.2f}  dNLL {row['delta_nll']:+.2f}")
 
-    out = ROOT / "runs" / f"calibrate_{args.model.split('/')[-1]}_{time.strftime('%Y%m%d-%H%M%S')}.json"
+    out = ROOT / "runs" / f"calibrate{'_open' if args.open else ''}_{args.model.split('/')[-1]}_{time.strftime('%Y%m%d-%H%M%S')}.json"
     out.parent.mkdir(exist_ok=True)
     out.write_text(json.dumps({"model": args.model, "clean_nll": clean_nll, "clean_mrr": clean_mrr, "rows": rows}, indent=1))
     print(out)
