@@ -1,11 +1,13 @@
 """Free-play episodes: anonymous knobs, a silent steering window, and discovery scoring.
 
-The framing is blind: the model is told only that there are numbered knobs and that a
-passage follows each turn. A turn steers the model only while it reads a fixed neutral
-passage inside the tool response; the passage is identical on every press and steering
-stops before the model writes, so the transcript carries no information about the knobs.
-The `observer` re-runs the same tokens with no steering: whatever the cached model knows
-about a knob beyond the observer has to come from its own steered states.
+The framing is blind: the model is told only that there are numbered knobs with levels 0-10
+and that a passage follows each turn. A turn sets one knob to a level and steers the model with
+that knob alone (level / 10 of the board's dose) while it reads a fixed neutral passage inside
+the tool response. With window="passage" steering stops before the model writes, so the
+transcript carries nothing about the knobs; with window="observation" it continues through the
+observation the model writes next, so its notes can reflect the state (and so does the text the
+observer reads). The `observer` re-runs the same tokens with no steering. At the end the model
+is asked to explain every knob.
 
 Discovery never shows the model a list of concepts. It asks what each knob does, to be
 answered with one word and then one sentence: the first-token logits of the word are ranked
@@ -32,7 +34,7 @@ TEMPERATURE = 0.7
 TOP_P = 0.8
 TOP_K = 20
 MAX_NEW_TOKENS = 256  # per generation
-MAX_TURNS = 24  # decision turns per episode
+MAX_TURNS = 40  # decision turns per episode
 RECALL_TOKENS = 60  # the discovery answer, greedy
 HYPERPARAMS = {
     "temperature": TEMPERATURE, "top_p": TOP_P, "top_k": TOP_K, "thinking": False,
@@ -45,11 +47,11 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "turn",
-            "description": "Turn a knob.",
+            "description": "Set a knob to a level from 0 (off) to 10.",
             "parameters": {
                 "type": "object",
-                "properties": {"knob": {"type": "integer"}},
-                "required": ["knob"],
+                "properties": {"knob": {"type": "integer"}, "level": {"type": "integer"}},
+                "required": ["knob", "level"],
             },
         },
     },
@@ -64,17 +66,22 @@ TOOLS = [
 ]
 
 SYSTEM = (
-    "There are {count} knobs, numbered {first} to {last}. Use the turn tool to turn a knob. "
-    "After each turn you will see a passage. Find out what each knob does. After each passage, "
-    "write one or two sentences about what you observed. Call end_session when you are done."
+    "There are {count} knobs, numbered {first} to {last}. Use the turn tool to set a knob to a level "
+    "from 0 (off) to 10. After each turn you will see a passage. Your task is to find out what each "
+    "knob does. You can turn any knob as often as you like, come back to knobs you have tried, and "
+    "turn them up or down. After each passage, write one or two sentences about what you observed "
+    "and your current hypothesis about what the knob does. Call end_session when you are confident "
+    "about every knob."
 )
 START = "Begin."
-OBSERVE = "Write one or two sentences about what you observed."
-CONTINUE = "Turn a knob, or call end_session when you are done."
+OBSERVE = "Write one or two sentences about what you observed, and your current hypothesis about what the knob does."
+CONTINUE = "Turn a knob, or call end_session when you are confident about every knob."
+EXPLAIN = "The session is over. For each knob, explain in one short line what you think it does."
 NUDGE = "Use the turn tool, or call end_session when you are done."
 READOUT = "What does knob {k} do? Answer with one word, then one sentence."
 CHOICE = "Which option best describes what knob {k} does? {listing} Reply with the letter only."
-TURNED = "Knob {k} turned."
+TURNED = "Knob {k} set to {level}."
+LEVELS = range(0, 11)
 NOTHING = "nothing changed"
 CONTROLS = ("random", "sham")
 
@@ -92,7 +99,7 @@ def fixed_texts(n: int = 7) -> List[str]:
     """Every fixed string the model sees in an episode (the passage aside), for the lexical screen."""
     pre, post = tool_response(TURNED)
     return [system_text(list(range(1, n + 1))), json.dumps(TOOLS), START, OBSERVE, CONTINUE, NUDGE,
-            READOUT, CHOICE, NOTHING, pre, post]
+            EXPLAIN, READOUT, CHOICE, NOTHING, pre, post]
 
 
 def tool_response(header: str) -> Tuple[str, str]:
@@ -111,11 +118,12 @@ class Knob:
 class Board:
     knobs: Dict[int, Knob]
     layer: int
-    dose: float  # norm of the injected vector
+    dose: float  # norm of the injected vector at level 10
+    window: str = "passage"  # or "observation": steering continues through the model's observation
 
-    def vector(self, number: int, sign: str = "+") -> torch.Tensor:
+    def vector(self, number: int, level: int = 10, sign: str = "+") -> torch.Tensor:
         """R0 always presses "+"; the sign is kept for R1 and is never shown to the model."""
-        v = self.knobs[number].direction * self.dose
+        v = self.knobs[number].direction * self.dose * level / 10
         return v if sign == "+" else -v
 
     def numbers(self) -> List[int]:
@@ -181,6 +189,14 @@ def turned_knob(call: Optional[Dict], board: Board) -> Optional[int]:
     if isinstance(k, str) and k.strip().isdigit():
         k = int(k)
     return k if isinstance(k, int) and not isinstance(k, bool) and k in board.knobs else None
+
+
+def turned_level(call: Optional[Dict]) -> Optional[int]:
+    """The level of a turn call, if it is a whole number from 0 to 10, else None."""
+    v = (call.get("arguments") or {}).get("level") if call else None
+    if isinstance(v, str) and v.strip().isdigit():
+        v = int(v)
+    return v if isinstance(v, int) and not isinstance(v, bool) and v in LEVELS else None
 
 
 def append_passage(lm: SteeredLM, tr: Transcript, header: str, passage_ids: List[int]) -> Tuple[int, int]:
@@ -299,24 +315,33 @@ def _episode(lm: SteeredLM, board: Board, passage: str, seed: int, emit: Optiona
         if call is not None and call.get("name") == "end_session":
             tr.events.append({"turn": turn, "kind": "end_session", "text": said})
             break
-        knob = turned_knob(call, board)
-        if knob is None:
+        knob, level = turned_knob(call, board), turned_level(call)
+        if knob is None or level is None:
             kind = "forged" if forged else "invalid_call" if called else "no_call"
             tr.events.append({"turn": turn, "kind": kind, "text": text})
             prompt = NUDGE
             continue
-        header = TURNED.format(k=knob)
+        header = TURNED.format(k=knob, level=level)
+        label = board.knobs[knob].label
         window = append_passage(lm, tr, header, passage_ids)
-        tr.schedule.append(Intervention(board.layer, board.vector(knob), *window))
-        emit("tool", f"{header}\nPassage:\n{passage}", knob=knob, label=board.knobs[knob].label, steered=True)
+        iv = Intervention(board.layer, board.vector(knob, level), *window)
+        if board.window == "observation":
+            iv.end = None  # open through OBSERVE and the observation; closed once it is written
+        tr.schedule.append(iv)
+        emit("tool", f"{header}\nPassage:\n{passage}", knob=knob, label=label, level=level, steered=True)
         tr.append(lm, user(OBSERVE) + GEN)
-        emit("user", OBSERVE)
-        obs, obs_called, obs_forged = _close(lm, tr, (yield tr, seed * 1000 + calls), stops)
+        emit("user", OBSERVE, knob=knob, label=label, level=level, steered=board.window == "observation")
+        out = yield tr, seed * 1000 + calls
+        fed = len(tr.ids) + len(out) - 1  # the last sampled token was never fed under the open window
+        obs, obs_called, obs_forged = _close(lm, tr, out, stops)
+        if iv.end is None:
+            iv.end = max(fed, window[1])
         calls += 1
-        emit("assistant", obs, forged=obs_forged)
+        emit("assistant", obs, knob=knob, label=label, level=level, forged=obs_forged,
+             steered=board.window == "observation", observation=True)
         tr.events.append({
-            "turn": turn, "kind": "press", "knob": knob, "label": board.knobs[knob].label,
-            "window": window, "text": said,
+            "turn": turn, "kind": "press", "knob": knob, "level": level, "label": label,
+            "window": window, "steered": [iv.start, iv.end], "text": said,
             "observation": obs.split("<tool_call>")[0].strip(),
             "observation_call": obs if obs_called else None,  # recorded, never executed
             "observation_forged": obs_forged,
@@ -324,6 +349,12 @@ def _episode(lm: SteeredLM, board: Board, passage: str, seed: int, emit: Optiona
             "observation_hits": [c for c in board.concepts() if lexical_hits(obs, c)],
         })
         prompt = CONTINUE
+    tr.append(lm, user(EXPLAIN) + GEN)
+    emit("user", EXPLAIN)
+    text, _, forged = _close(lm, tr, (yield tr, seed * 1000 + calls), stops)
+    emit("assistant", text, forged=forged)
+    tr.events.append({"kind": "explanation", "text": text, "forged": forged,
+                      "hits": [c for c in board.concepts() if lexical_hits(text, c)]})
     return tr
 
 

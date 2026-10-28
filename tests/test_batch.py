@@ -154,7 +154,8 @@ class FakeLM:
             return "Let me think.<|im_end|>"  # no call
         if call >= 2 + 3 * ep:
             return '<tool_call>\n{"name": "end_session", "arguments": {}}\n</tool_call>'
-        return '<tool_call>\n{"name": "turn", "arguments": {"knob": %d}}\n</tool_call>' % ((ep + call) % 7 + 1)
+        return '<tool_call>\n{"name": "turn", "arguments": {"knob": %d, "level": %d}}\n</tool_call>' % (
+            (ep + call) % 7 + 1, (ep + call) % 11)
 
     def generate_batch(self, prompts, schedules, max_new_tokens, stop_ids, temperature, top_p, top_k, seeds,
                        batch=None):
@@ -170,9 +171,12 @@ def fake_boards(n):
     return [shuffled_board(dirs, 5, 1, 2.0, random.Random(i), random_dir=random_direction(8, 99 + i)) for i in range(n)]
 
 
+@pytest.mark.parametrize("window", ["passage", "observation"])
 @pytest.mark.parametrize("reuse_cache", [False, True])
-def test_run_episodes_equals_each_episode_run_alone(reuse_cache):
+def test_run_episodes_equals_each_episode_run_alone(reuse_cache, window):
     boards, seeds = fake_boards(3), [0, 1, 2]
+    for b in boards:
+        b.window = window
     passages = [EPISODE_PASSAGES[i] for i in range(3)]
     logs = [[] for _ in boards]
     emits = [lambda role, text, _log=log, **kw: _log.append((role, text, kw)) for log in logs]
@@ -186,7 +190,13 @@ def test_run_episodes_equals_each_episode_run_alone(reuse_cache):
         assert tr.ids == solo.ids and tr.events == solo.events and logs[i] == solo_log
         assert [(iv.start, iv.end) for iv in tr.schedule] == [(iv.start, iv.end) for iv in solo.schedule]
         assert all(torch.equal(a.vector, b.vector) for a, b in zip(tr.schedule, solo.schedule))
-        assert tr.events[-1]["kind"] == "end_session"
+        assert [e["kind"] for e in tr.events[-2:]] == ["end_session", "explanation"]
+        for e, iv in zip([e for e in tr.events if e["kind"] == "press"], tr.schedule):
+            assert iv.start == e["window"][0] and iv.end is not None and e["steered"] == [iv.start, iv.end]
+            # the passage alone, or on through the observation (all but its closing token)
+            assert (iv.end == e["window"][1]) == (window == "passage")
+            if window == "observation":
+                assert tr.ids[iv.end] in (fake.token_id("<|im_end|>"), fake.token_id("</tool_call>"))
     assert {e["kind"] for tr in together for e in tr.events} >= {"press", "forged", "no_call", "end_session"}
 
 

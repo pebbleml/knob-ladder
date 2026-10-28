@@ -278,10 +278,11 @@ def render_msg(e, t0):
     role = str(e.get("role", "?"))
     cls = "steered" if e.get("steered") else (role if role in ("system", "user", "assistant", "tool") else "tool")
     hd = esc(role)
-    if e.get("steered"):
-        hd += f" &middot; STEERED knob {esc(e.get('knob'))} = <b>{esc(label_of(e))}</b>"
-    elif e.get("knob") is not None:
-        hd += f" &middot; knob {esc(e.get('knob'))}"
+    lv = f" @ level {esc(e.get('level'))}" if e.get("level") is not None else ""
+    if e.get("knob") is not None:
+        what = "after " if role != "tool" else ""
+        hd += (f" &middot; {'STEERED ' if e.get('steered') else ''}{what}knob {esc(e.get('knob'))}"
+               f" = <b>{esc(label_of(e))}</b>{lv}")
     if t0 is not None and isinstance(e.get("t"), (int, float)):
         hd += f" <span class=dim>+{e['t'] - t0:.1f}s</span>"
     return f"<div class='msg {cls}'><div class=hd>{hd}</div><pre>{esc(e.get('text', ''))}</pre></div>"

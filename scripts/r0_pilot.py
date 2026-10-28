@@ -3,8 +3,10 @@
     python3 scripts/r0_pilot.py --model Qwen/Qwen3-32B --dtype bfloat16 --screen latest --calibration latest --episodes 8
 
 Knob concepts come from the G0 screen's knob list; layer and alpha from the G1 calibration's
-`best` (or --layer/--alpha). Each episode has 5 concept knobs, a random direction and a sham
-on knobs 1-7, and one fixed EPISODE_PASSAGES passage per episode, cycling through all 16.
+`best` (or --layer/--alpha), whose dose is level 10. Each episode has 10 concept knobs, a random
+direction and a sham on knobs 1-12, and the same EPISODE_PASSAGES passage on every press of every
+episode (--passage; -1 cycles through all 16). --window observation keeps steering on through
+the model's observation and takes its dose from the open-window calibration.
 Writes one JSON line per episode to runs/, and every message as it happens to
 runs/live/<run>/ for scripts/watch.py (the model never reads either). The multiple choice,
 which shows the model the board's concepts, runs only with --choice; ownership trials (and
@@ -46,7 +48,10 @@ def main():
     ap.add_argument("--calibration", help="G1 calibration JSON (or 'latest'); its best sets --layer and --alpha")
     ap.add_argument("--layer", type=float, default=0.7, help="injection depth as a fraction of layers")
     ap.add_argument("--alpha", type=float, default=1.0, help="dose as a fraction of the median residual norm")
-    ap.add_argument("--knobs", type=int, default=5, help="concept knobs per episode (plus random and sham)")
+    ap.add_argument("--knobs", type=int, default=10, help="concept knobs per episode (plus random and sham)")
+    ap.add_argument("--window", default="passage", choices=["passage", "observation"],
+                    help="steer the passage only, or the passage and the observation written after it")
+    ap.add_argument("--passage", type=int, default=0, help="EPISODE_PASSAGES index for every episode; -1 cycles")
     ap.add_argument("--episodes", type=int, default=2)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--shard", default="0/1", help="i/n: run episodes e with e %% n == i (scripts/shards.sh)")
@@ -65,12 +70,14 @@ def main():
     screen = load_screen(args.screen, args.model)
     calib_path = None
     if args.calibration:
-        calib_path = resolve_run(args.calibration, f"calibrate_{args.model.split('/')[-1]}_*.json")
+        mode = "open" if args.window == "observation" else "silent"
+        prefix = "calibrate_open_" if mode == "open" else "calibrate_"
+        calib_path = resolve_run(args.calibration, f"{prefix}{args.model.split('/')[-1]}_*.json")
         calib = json.loads(calib_path.read_text())
         # 'latest' resolves each file on its own; make sure they belong together.
         assert Path(calib["screen"]).resolve() == Path(screen["path"]).resolve(), \
             f"{calib_path} was calibrated on {calib['screen']}, not {screen['path']}"
-        assert calib["model"] == args.model and calib["mode"] == "silent", (calib["model"], calib["mode"])
+        assert calib["model"] == args.model and calib["mode"] == mode, (calib["model"], calib["mode"])
         assert calib["passages_version"] == screen["passages_version"] == PASSAGES_VERSION
         best = calib["best"]
         assert best is not None, f"{calib_path} has no best (layer, alpha)"
@@ -108,7 +115,7 @@ def main():
     live = ROOT / "runs" / "live" / run_id
     live.mkdir(parents=True, exist_ok=True)
     (live / "meta.json").write_text(json.dumps({
-        "run": run_id, "model": args.model, "layer": layer, "alpha": args.alpha, "dose": dose,
+        "run": run_id, "model": args.model, "layer": layer, "alpha": args.alpha, "dose": dose, "window": args.window,
         "episodes": args.episodes, "shard": args.shard, "batch": args.batch, "reuse_cache": args.reuse_cache,
         "started": time.time()}))
 
@@ -116,11 +123,12 @@ def main():
         """An episode's board and live log. The seed depends only on ep, whatever the shard or batch."""
         seed = args.seed * 100 + ep
         rng = random.Random(seed)
-        passage_index = (args.seed + ep) % len(EPISODE_PASSAGES)  # balanced over passages
+        passage_index = args.passage if args.passage >= 0 else (args.seed + ep) % len(EPISODE_PASSAGES)
         board = shuffled_board(
             {w: vectors[w] for w in knob_words}, args.knobs, layer, dose, rng,
             random_dir=random_direction(lm.d_model, seed),
         )
+        board.window = args.window
         log = (live / f"ep{ep:03d}.jsonl").open("a")
 
         def note(kind, **fields):
@@ -156,7 +164,7 @@ def main():
                     "batch": args.batch, "reuse_cache": args.reuse_cache,
                     "provenance": prov, "readout_candidates": knob_words, "raw_norm_ratio": raw_norm,
                     "passages_version": PASSAGES_VERSION, "passage_index": e["passage_index"],
-                    "layer": layer, "layer_frac": args.layer, "alpha": args.alpha, "dose": dose,
+                    "layer": layer, "layer_frac": args.layer, "alpha": args.alpha, "dose": dose, "window": args.window,
                     "screen": screen["path"], "calibration": str(calib_path) if calib_path else None,
                     "board": {k: kb.label for k, kb in board.knobs.items()},
                     "events": tr.events,
