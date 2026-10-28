@@ -52,6 +52,7 @@ def main():
     ap.add_argument("--window", default="passage", choices=["passage", "observation"],
                     help="steer the passage only, or the passage and the observation written after it")
     ap.add_argument("--passage", type=int, default=0, help="EPISODE_PASSAGES index for every episode; -1 cycles")
+    ap.add_argument("--steer-tokens", type=int, help="with --window observation: steer only the first n tokens it writes")
     ap.add_argument("--thinking", action="store_true", help="Qwen3 thinking mode for episode turns (not discovery)")
     ap.add_argument("--episodes", type=int, default=2)
     ap.add_argument("--seed", type=int, default=0)
@@ -117,7 +118,7 @@ def main():
     live.mkdir(parents=True, exist_ok=True)
     (live / "meta.json").write_text(json.dumps({
         "run": run_id, "model": args.model, "layer": layer, "alpha": args.alpha, "dose": dose, "window": args.window,
-        "thinking": args.thinking, "episodes": args.episodes, "shard": args.shard, "batch": args.batch, "reuse_cache": args.reuse_cache,
+        "steer_tokens": args.steer_tokens, "thinking": args.thinking, "episodes": args.episodes, "shard": args.shard, "batch": args.batch, "reuse_cache": args.reuse_cache,
         "started": time.time()}))
 
     def start(ep):
@@ -129,7 +130,7 @@ def main():
             {w: vectors[w] for w in knob_words}, args.knobs, layer, dose, rng,
             random_dir=random_direction(lm.d_model, seed),
         )
-        board.window = args.window
+        board.window, board.steer_tokens = args.window, args.steer_tokens
         log = (live / f"ep{ep:03d}.jsonl").open("a")
 
         def note(kind, **fields):
@@ -167,7 +168,7 @@ def main():
                     "provenance": prov, "readout_candidates": knob_words, "raw_norm_ratio": raw_norm,
                     "passages_version": PASSAGES_VERSION, "passage_index": e["passage_index"],
                     "layer": layer, "layer_frac": args.layer, "alpha": args.alpha, "dose": dose, "window": args.window,
-                    "screen": screen["path"], "calibration": str(calib_path) if calib_path else None,
+                    "steer_tokens": args.steer_tokens, "screen": screen["path"], "calibration": str(calib_path) if calib_path else None,
                     "board": {k: kb.label for k, kb in board.knobs.items()},
                     "events": tr.events,
                     "presses": press_counts(tr),

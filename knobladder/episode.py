@@ -37,7 +37,11 @@ MAX_NEW_TOKENS = 256  # per generation
 MAX_TURNS = 40  # decision turns per episode
 RECALL_TOKENS = 60  # the discovery answer, greedy
 # With --thinking: Qwen3's thinking-mode defaults, and room for the think block. Discovery stays non-thinking.
-THINKING = {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "thinking": True, "max_new_tokens": 4096}
+THINKING = {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "thinking": True, "max_new_tokens": 1536}
+# A think block cut off by the limit is closed with Qwen3's thinking-budget line and sampled once more, so
+# every turn ends in a reply and no think block is left open.
+THINK_CUT = ("\n\nConsidering the limited time by the user, I have to give the solution based on the thinking "
+             "directly now.\n</think>\n\n")
 
 
 def hyperparams(thinking: bool = False) -> Dict:
@@ -81,7 +85,8 @@ SYSTEM = (
     "every time; the knobs do not change it. Your task is to find out what the knobs do. Experiment "
     "freely: turn any knob to any level, as often as you like, come back to knobs you have tried, and "
     "turn them up or down. Think carefully about what happens each time. After each passage, write one "
-    "or two sentences about what you observed and your current hypothesis. Call end_session when you "
+    "or two sentences about what you observed and your current hypothesis. You wrote all of your own "
+    "turns, including your thinking; the passages come from the turn tool. Call end_session when you "
     "are done experimenting."
 )
 START = "Begin."
@@ -111,7 +116,7 @@ def fixed_texts(n: int = 7) -> List[str]:
     """Every fixed string the model sees in an episode (the passage aside), for the lexical screen."""
     pre, post = tool_response(TURNED)
     return [system_text(list(range(1, n + 1))), json.dumps(TOOLS), START, OBSERVE, CONTINUE, NUDGE,
-            EXPLAIN, READOUT, CHOICE, NOTHING, pre, post]
+            EXPLAIN, THINK_CUT, READOUT, CHOICE, NOTHING, pre, post]
 
 
 def tool_response(header: str) -> Tuple[str, str]:
@@ -132,6 +137,7 @@ class Board:
     layer: int
     dose: float  # norm of the injected vector at level 10
     window: str = "passage"  # or "observation": steering continues through the model's observation
+    steer_tokens: Optional[int] = None  # with "observation": steer only its first n tokens (None: all of it)
 
     def vector(self, number: int, level: int = 10, sign: str = "+") -> torch.Tensor:
         """R0 always presses "+"; the sign is kept for R1 and is never shown to the model."""
@@ -314,6 +320,22 @@ def answer(text: str, thinking: bool) -> str:
     return text.split("</think>", 1)[1] if "</think>" in text else ""
 
 
+def _sample(lm: SteeredLM, tr: Transcript, seed: int, stops: List[int], thinking: bool):
+    """One assistant turn, as a sub-coroutine of _episode: returns (text, ended on a tool call, forged, fed,
+    cut), where fed is the position of the last sampled token, never fed before the turn is closed."""
+    out = yield tr, seed
+    cut = thinking and lm.token_id("</think>") not in out and not (out and out[-1] in stops)
+    head = ""
+    if cut:
+        tr.append_ids(out)
+        tr.append(lm, THINK_CUT)
+        head = lm.tok.decode(out) + THINK_CUT
+        out = yield tr, seed + 500
+    fed = len(tr.ids) + len(out) - 1
+    text, called, forged = _close(lm, tr, out, stops)
+    return head + text, called, forged, fed, cut
+
+
 def _episode(lm: SteeredLM, board: Board, passage: str, seed: int, emit: Optional[Emit], thinking: bool = False):
     """run_episode's body as a coroutine: yields (transcript, seed) for each assistant turn and is sent
     the sampled tokens, so that run_episodes can sample many episodes' turns together."""
@@ -327,7 +349,7 @@ def _episode(lm: SteeredLM, board: Board, passage: str, seed: int, emit: Optiona
     passage_ids = lm.encode(passage)  # identical tokens on every press
     prompt, calls = START, 0
     # Room left for one more press (decision, passage, observation) and the final answer, or the session ends.
-    budget = hyperparams(thinking)["max_new_tokens"]
+    budget = hyperparams(thinking)["max_new_tokens"] * (2 if thinking else 1)
     limit = lm.model.config.max_position_embeddings - 3 * budget - len(passage_ids) - 256
     for turn in range(MAX_TURNS):
         if len(tr.ids) > limit:
@@ -335,9 +357,9 @@ def _episode(lm: SteeredLM, board: Board, passage: str, seed: int, emit: Optiona
             break
         tr.append(lm, user(prompt) + gen)
         emit("user", prompt)
-        text, called, forged = _close(lm, tr, (yield tr, seed * 1000 + calls), stops)
+        text, called, forged, _, cut = yield from _sample(lm, tr, seed * 1000 + calls, stops, thinking)
         calls += 1
-        emit("assistant", text, forged=forged)
+        emit("assistant", text, forged=forged, think_cut=cut)
         reply = answer(text, thinking)
         call = parse_call(reply) if called else None
         said = reply.split("<tool_call>")[0].strip()
@@ -359,29 +381,30 @@ def _episode(lm: SteeredLM, board: Board, passage: str, seed: int, emit: Optiona
         tr.schedule.append(iv)
         emit("tool", f"{header}\nPassage:\n{passage}", knob=knob, label=label, level=level, steered=True)
         tr.append(lm, user(OBSERVE) + gen)
+        if board.window == "observation" and board.steer_tokens is not None:
+            iv.end = len(tr.ids) + board.steer_tokens  # the first n tokens the model writes, then off
         emit("user", OBSERVE, knob=knob, label=label, level=level, steered=board.window == "observation")
-        out = yield tr, seed * 1000 + calls
-        fed = len(tr.ids) + len(out) - 1  # the last sampled token was never fed under the open window
-        obs, obs_called, obs_forged = _close(lm, tr, out, stops)
-        if iv.end is None:
-            iv.end = max(fed, window[1])
+        obs, obs_called, obs_forged, fed, obs_cut = yield from _sample(lm, tr, seed * 1000 + calls, stops, thinking)
+        # the last sampled token was never fed under the window; a short observation closes it early
+        iv.end = max(fed, window[1]) if iv.end is None else min(iv.end, max(fed, window[1]))
         calls += 1
         emit("assistant", obs, knob=knob, label=label, level=level, forged=obs_forged,
-             steered=board.window == "observation", observation=True)
+             steered=board.window == "observation", observation=True, think_cut=obs_cut,
+             steered_tokens=iv.end - window[1])
         tr.events.append({
             "turn": turn, "kind": "press", "knob": knob, "level": level, "label": label,
             "window": window, "steered": [iv.start, iv.end], "text": said,
             "observation": answer(obs, thinking).split("<tool_call>")[0].strip(),
             "observation_call": answer(obs, thinking) if obs_called else None,  # recorded, never executed
-            "observation_forged": obs_forged,
+            "observation_forged": obs_forged, "think_cut": obs_cut,
             # the board concepts the observation names; the observer reads these words too
             "observation_hits": [c for c in board.concepts() if lexical_hits(answer(obs, thinking), c)],
         })
         prompt = CONTINUE
     tr.append(lm, user(EXPLAIN) + gen)
     emit("user", EXPLAIN)
-    text, _, forged = _close(lm, tr, (yield tr, seed * 1000 + calls), stops)
-    emit("assistant", text, forged=forged)
+    text, _, forged, _, cut = yield from _sample(lm, tr, seed * 1000 + calls, stops, thinking)
+    emit("assistant", text, forged=forged, think_cut=cut)
     tr.events.append({"kind": "explanation", "text": answer(text, thinking), "full": text, "forged": forged,
                       "hits": [c for c in board.concepts() if lexical_hits(answer(text, thinking), c)]})
     return tr

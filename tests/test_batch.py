@@ -12,7 +12,7 @@ from transformers import DynamicCache
 
 from knobladder import episode
 from knobladder.episode import (
-    MAX_NEW_TOKENS, OBSERVE, READOUT, TURNED, Transcript, append_passage, discovery, run_episode, run_episodes,
+    MAX_NEW_TOKENS, OBSERVE, READOUT, THINK_CUT, TURNED, Transcript, append_passage, discovery, run_episode, run_episodes,
     shuffled_board, system_text,
 )
 from knobladder.knobs import CONCEPTS, random_direction
@@ -201,6 +201,36 @@ def test_run_episodes_equals_each_episode_run_alone(reuse_cache, window):
     assert {e["kind"] for tr in together for e in tr.events} >= {"press", "forged", "no_call", "end_session"}
 
 
+
+class ThinkingFake(FakeLM):
+    """Thinking mode: every observation's think block runs past the limit; decisions think briefly."""
+
+    def reply(self, prompt, seed):
+        tail = self.decode(prompt[-400:])
+        if tail.endswith(THINK_CUT):
+            return "It read the same.<|im_end|>"
+        if tail.rsplit("<|im_start|>user\n", 1)[-1].startswith(OBSERVE):
+            return "<think>\nhoney honey honey honey"  # no </think>, no stop: cut off
+        return "<think>\nok\n</think>\n\n" + super().reply(prompt, seed)
+
+
+@pytest.mark.parametrize("reuse_cache", [False, True])
+def test_thinking_cut_is_closed_and_steering_stops_after_n_tokens(reuse_cache):
+    boards, seeds = fake_boards(3), [0, 1, 2]
+    for b in boards:
+        b.window, b.steer_tokens = "observation", 5
+    passages = [EPISODE_PASSAGES[i] for i in range(3)]
+    fake = ThinkingFake()
+    together = run_episodes(fake, boards, passages, seeds, reuse_cache=reuse_cache, thinking=True)
+    first = fake.encode("<think>\nhoney honey honey honey")[:5]
+    for i, tr in enumerate(together):
+        solo = run_episodes(ThinkingFake(), [boards[i]], [passages[i]], [seeds[i]], thinking=True)[0]
+        assert tr.ids == solo.ids and tr.events == solo.events
+        presses = [e for e in tr.events if e["kind"] == "press"]
+        assert presses and all(e["think_cut"] and e["observation"] == "It read the same." for e in presses)
+        for e, iv in zip(presses, tr.schedule):
+            assert tr.ids[iv.end - 5:iv.end] == first  # steered: the passage, OBSERVE, and 5 written tokens
+        assert fake.decode(tr.ids).count(THINK_CUT) == len(presses)
 
 def test_episode_ends_before_the_context_is_full():
     boards, passage = fake_boards(3), EPISODE_PASSAGES[0]
