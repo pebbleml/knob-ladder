@@ -9,7 +9,10 @@ For every (passage, candidate concept) pair, unsteered:
 - cosine: between the passage's mean residual at the layer (mean-subtracted over all
   passages) and the concept vector.
 
-A pair is flagged if its rank is in the top 3 or its cosine is in the top 5% of all pairs.
+A pair is flagged when that passage evokes the concept more than the other passages do: its
+rank is in the top 5 and at least Z standard deviations better than the concept's mean rank
+over passages, or its cosine is at least Z standard deviations above the concept's mean cosine.
+(An absolute top-k rule would flag something on every passage, however clean.)
 Concepts flagged on 2+ passages, or left without a unique first token, are dropped. From
 the survivors, 16 calibration and 32 knob concepts are drawn, disjoint and seeded, preferring
 low pairwise cosine. Calibration and episodes read the lists from the JSON this writes.
@@ -35,8 +38,8 @@ from knobladder.model import SteeredLM  # noqa: E402
 from knobladder.readout import QUESTION, first_tokens, ranks, readout_prompt  # noqa: E402
 from knobladder.text import NEUTRAL_PASSAGES, PASSAGES_VERSION  # noqa: E402
 
-TOP_RANK = 3
-TOP_COS_FRAC = 0.05
+TOP_RANK = 5
+Z = 2.5
 MAX_FLAGGED = 2  # drop a concept flagged on this many passages
 
 
@@ -88,9 +91,16 @@ def main():
     pm = pm - pm.mean(0, keepdim=True)
     cos = [{w: float(torch.dot(unit(pm[i]), unit(vectors[w]))) for w in CONCEPTS} for i in range(len(pm))]
 
-    all_cos = sorted((c for row in cos for c in row.values()), reverse=True)
-    cut = all_cos[max(0, math.ceil(TOP_COS_FRAC * len(all_cos)) - 1)]
-    flags = [{w: rank[i][w] <= TOP_RANK or cos[i][w] >= cut for w in CONCEPTS} for i in range(len(cos))]
+    def z(rows, w):
+        xs = [r[w] for r in rows]
+        m = sum(xs) / len(xs)
+        sd = math.sqrt(sum((x - m) ** 2 for x in xs) / (len(xs) - 1)) or 1e-8
+        return [(x - m) / sd for x in xs]
+
+    zr = {w: z(rank, w) for w in CONCEPTS}
+    zc = {w: z(cos, w) for w in CONCEPTS}
+    flags = [{w: (rank[i][w] <= TOP_RANK and zr[w][i] <= -Z) or zc[w][i] >= Z for w in CONCEPTS}
+             for i in range(len(cos))]
     n_flagged = {w: sum(f[w] for f in flags) for w in CONCEPTS}
     dropped = sorted({w for w in CONCEPTS if n_flagged[w] >= MAX_FLAGGED} | set(no_token), key=CONCEPTS.index)
     survivors = [w for w in CONCEPTS if w not in dropped]
@@ -115,7 +125,7 @@ def main():
     for i, r in enumerate(rank):
         top = sorted(r, key=r.get)[:TOP_RANK]
         print(f"  passage {i:>2} ({lengths[i]} tok): top {top}, max cos {max(cos[i].values()):+.2f}")
-    print(f"cosine cut (top {TOP_COS_FRAC:.0%}) {cut:+.3f}; no unique first token {no_token}")
+    print(f"flagged pairs {sum(sum(f.values()) for f in flags)}; no unique first token {no_token}")
     print(f"dropped {len(dropped)}: {dropped}")
     print(f"survivors {len(survivors)}; selected max pairwise cos {max_pair:+.2f}")
     print(f"calibration {calib}\nknobs {knobs}")
@@ -125,10 +135,10 @@ def main():
     out.write_text(json.dumps({
         "model": args.model, "layer": layer, "layer_frac": args.layer, "n_layers": lm.n_layers,
         "passages_version": PASSAGES_VERSION, "seed": args.seed, "max_cos": args.max_cos,
-        "rule": {"top_rank": TOP_RANK, "top_cos_frac": TOP_COS_FRAC, "max_flagged": MAX_FLAGGED},
+        "rule": {"top_rank": TOP_RANK, "z": Z, "max_flagged": MAX_FLAGGED},
         "concepts": CONCEPTS, "first_tokens": {w: sorted(t) for w, t in firsts.items()},
         "no_unique_token": no_token, "passage_tokens": lengths,
-        "ranks": rank, "cosines": cos, "cos_cut": cut, "flags": flags, "n_flagged": n_flagged,
+        "ranks": rank, "cosines": cos, "flags": flags, "n_flagged": n_flagged,
         "dropped": dropped, "survivors": survivors, "relaxed": relaxed,
         "selected_max_pairwise_cos": max_pair, "calibration": calib, "knobs": knobs,
     }, indent=1))

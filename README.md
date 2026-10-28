@@ -33,9 +33,9 @@ knowing what a knob does beyond what an unsteered `observer` re-run of the same 
 
 ## Gates
 
-- **G0 screen** (`scripts/screen.py`): with no steering, flag (passage, concept) pairs where the
-  concept already ranks top-3 on the topic readout after the passage, or where the passage's mean
-  residual has a top-5% cosine with the concept vector. Concepts flagged on 2+ passages are dropped;
+- **G0 screen** (`scripts/screen.py`): with no steering, flag (passage, concept) pairs where that
+  passage evokes the concept more than the other passages do: a top-5 topic-readout rank at least 2.5 SD
+  better than the concept's mean rank, or a passage-residual cosine 2.5 SD above the concept's mean. Concepts flagged on 2+ passages are dropped;
   16 calibration and 32 knob concepts are drawn from the rest, preferring pairwise cosine < 0.3.
 - **G1 calibration** (`scripts/calibrate.py`): calibration concepts and passages only. Silent-window
   topic readout (MRR among the 16, chance 0.211) and passage dNLL per (layer, alpha). Passes if the
