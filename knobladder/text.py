@@ -11,6 +11,7 @@ import json
 from typing import Dict, List
 
 GEN = "<|im_start|>assistant\n<think>\n\n</think>\n\n"
+GEN_THINK = "<|im_start|>assistant\n"  # thinking on: the model opens its own <think> block
 END = "<|im_end|>\n"
 
 

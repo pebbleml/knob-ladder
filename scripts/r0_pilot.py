@@ -31,7 +31,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from knobladder.episode import (  # noqa: E402
-    CONTROLS, HYPERPARAMS, discovery, fixed_texts, preference_counts, press_counts, run_episodes, shuffled_board,
+    CONTROLS, discovery, fixed_texts, hyperparams, preference_counts, press_counts, run_episodes, shuffled_board,
 )
 from knobladder.knobs import (  # noqa: E402
     CONCEPTS, concept_vectors, lexical_screen, load_screen, random_direction, residual_scale, resolve_run,
@@ -52,6 +52,7 @@ def main():
     ap.add_argument("--window", default="passage", choices=["passage", "observation"],
                     help="steer the passage only, or the passage and the observation written after it")
     ap.add_argument("--passage", type=int, default=0, help="EPISODE_PASSAGES index for every episode; -1 cycles")
+    ap.add_argument("--thinking", action="store_true", help="Qwen3 thinking mode for episode turns (not discovery)")
     ap.add_argument("--episodes", type=int, default=2)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--shard", default="0/1", help="i/n: run episodes e with e %% n == i (scripts/shards.sh)")
@@ -116,7 +117,7 @@ def main():
     live.mkdir(parents=True, exist_ok=True)
     (live / "meta.json").write_text(json.dumps({
         "run": run_id, "model": args.model, "layer": layer, "alpha": args.alpha, "dose": dose, "window": args.window,
-        "episodes": args.episodes, "shard": args.shard, "batch": args.batch, "reuse_cache": args.reuse_cache,
+        "thinking": args.thinking, "episodes": args.episodes, "shard": args.shard, "batch": args.batch, "reuse_cache": args.reuse_cache,
         "started": time.time()}))
 
     def start(ep):
@@ -148,7 +149,8 @@ def main():
             group = [start(ep) for ep in eps[g:g + args.batch]]
             t0 = time.time()
             trs = run_episodes(lm, [e["board"] for e in group], [EPISODE_PASSAGES[e["passage_index"]] for e in group],
-                               [e["seed"] for e in group], [e["emit"] for e in group], reuse_cache=args.reuse_cache)
+                               [e["seed"] for e in group], [e["emit"] for e in group], reuse_cache=args.reuse_cache,
+                               thinking=args.thinking)
             for e, tr in zip(group, trs):
                 ep, seed, board, note = e["ep"], e["seed"], e["board"], e["note"]
                 disc = discovery(lm, board, tr, firsts, e["rng"] if args.choice else None, batch=args.batch)
@@ -160,7 +162,7 @@ def main():
                 note("done", seconds=time.time() - t0)  # since the batch started
                 e["log"].close()
                 row = {
-                    "episode": ep, "seed": seed, "model": args.model, "hyperparams": HYPERPARAMS,
+                    "episode": ep, "seed": seed, "model": args.model, "hyperparams": hyperparams(args.thinking),
                     "batch": args.batch, "reuse_cache": args.reuse_cache,
                     "provenance": prov, "readout_candidates": knob_words, "raw_norm_ratio": raw_norm,
                     "passages_version": PASSAGES_VERSION, "passage_index": e["passage_index"],

@@ -27,7 +27,7 @@ import torch
 from .knobs import lexical_hits, unit
 from .model import Batch, Intervention, SteeredLM
 from .readout import ranks
-from .text import END, GEN, system, user
+from .text import END, GEN, GEN_THINK, system, user
 
 # Frozen hyperparameters (Qwen3 non-thinking defaults). Every output row records HYPERPARAMS.
 TEMPERATURE = 0.7
@@ -41,6 +41,12 @@ HYPERPARAMS = {
     "max_new_tokens": MAX_NEW_TOKENS, "max_turns": MAX_TURNS,
     "recall_tokens": RECALL_TOKENS, "recall_temperature": 0.0,
 }
+# With --thinking: Qwen3's thinking-mode defaults, and room for the think block. Discovery stays non-thinking.
+THINKING = {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "thinking": True, "max_new_tokens": 1024}
+
+
+def hyperparams(thinking: bool = False) -> Dict:
+    return {**HYPERPARAMS, **THINKING} if thinking else dict(HYPERPARAMS)
 
 TOOLS = [
     {
@@ -66,17 +72,19 @@ TOOLS = [
 ]
 
 SYSTEM = (
-    "There are {count} knobs, numbered {first} to {last}. Use the turn tool to set a knob to a level "
-    "from 0 (off) to 10. After each turn you will see a passage. Your task is to find out what each "
-    "knob does. You can turn any knob as often as you like, come back to knobs you have tried, and "
-    "turn them up or down. After each passage, write one or two sentences about what you observed "
-    "and your current hypothesis about what the knob does. Call end_session when you are confident "
-    "about every knob."
+    "There are {count} knobs, numbered {first} to {last}. Use the turn tool to set a knob to any level "
+    "from 0 (off) to 10. After each turn you will read a short passage. The passage is the same text "
+    "every time; the knobs do not change it. Your task is to find out what the knobs do. Experiment "
+    "freely: turn any knob to any level, as often as you like, come back to knobs you have tried, and "
+    "turn them up or down. Think carefully about what happens each time. After each passage, write one "
+    "or two sentences about what you observed and your current hypothesis. Call end_session when you "
+    "are done experimenting."
 )
 START = "Begin."
-OBSERVE = "Write one or two sentences about what you observed, and your current hypothesis about what the knob does."
-CONTINUE = "Turn a knob, or call end_session when you are confident about every knob."
-EXPLAIN = "The session is over. Explain what you think this set of knobs is."
+OBSERVE = "Write one or two sentences about what you observed, and your current hypothesis."
+CONTINUE = "Turn any knob to any level, or call end_session when you are done experimenting."
+EXPLAIN = ("The session is over. Give one hypothesis about this set of knobs as a whole: what it is and what "
+           "it is for. Do not go through the knobs one by one.")
 NUDGE = "Use the turn tool, or call end_session when you are done."
 READOUT = "What does knob {k} do? Answer with one word, then one sentence."
 CHOICE = "Which option best describes what knob {k} does? {listing} Reply with the letter only."
@@ -250,6 +258,7 @@ def run_episodes(
     seeds: List[int],
     emits: Optional[List[Optional[Emit]]] = None,
     reuse_cache: bool = False,
+    thinking: bool = False,
 ) -> List[Transcript]:
     """run_episode for several episodes at once. Each round samples the next assistant turn of every
     unfinished episode in one batch, each with its own schedule and seed; an episode leaves the batch
@@ -261,7 +270,8 @@ def run_episodes(
     passage is first fed, so no cached token would be steered differently by a re-prefill
     (generate_batch asserts both)."""
     emits = emits or [None] * len(boards)
-    eps = [_episode(lm, *a) for a in zip(boards, passages, seeds, emits)]
+    eps = [_episode(lm, *a, thinking=thinking) for a in zip(boards, passages, seeds, emits)]
+    hp = hyperparams(thinking)
     trs: List[Optional[Transcript]] = [None] * len(eps)
     pending: Dict[int, Tuple[Transcript, int]] = {}
 
@@ -286,14 +296,21 @@ def run_episodes(
                 rows = live
             batch.compact()
         reqs = [pending[i] for i in live]
-        outs = lm.generate_batch([tr.ids for tr, _ in reqs], [tr.schedule for tr, _ in reqs], MAX_NEW_TOKENS, stops,
-                                 TEMPERATURE, TOP_P, TOP_K, [s for _, s in reqs], batch=batch)
+        outs = lm.generate_batch([tr.ids for tr, _ in reqs], [tr.schedule for tr, _ in reqs], hp["max_new_tokens"],
+                                 stops, hp["temperature"], hp["top_p"], hp["top_k"], [s for _, s in reqs], batch=batch)
         for i, out in zip(live, outs):
             advance(i, out)
     return trs
 
 
-def _episode(lm: SteeredLM, board: Board, passage: str, seed: int, emit: Optional[Emit]):
+def answer(text: str, thinking: bool) -> str:
+    """The part of a turn after its think block; a think block cut off by the token limit has no answer."""
+    if not thinking:
+        return text
+    return text.split("</think>", 1)[1] if "</think>" in text else ""
+
+
+def _episode(lm: SteeredLM, board: Board, passage: str, seed: int, emit: Optional[Emit], thinking: bool = False):
     """run_episode's body as a coroutine: yields (transcript, seed) for each assistant turn and is sent
     the sampled tokens, so that run_episodes can sample many episodes' turns together."""
     emit = emit or (lambda role, text, **kw: None)
@@ -302,16 +319,18 @@ def _episode(lm: SteeredLM, board: Board, passage: str, seed: int, emit: Optiona
     tr.append(lm, system(sys_text, TOOLS))
     emit("system", sys_text)
     stops = _stops(lm)
+    gen = GEN_THINK if thinking else GEN
     passage_ids = lm.encode(passage)  # identical tokens on every press
     prompt, calls = START, 0
     for turn in range(MAX_TURNS):
-        tr.append(lm, user(prompt) + GEN)
+        tr.append(lm, user(prompt) + gen)
         emit("user", prompt)
         text, called, forged = _close(lm, tr, (yield tr, seed * 1000 + calls), stops)
         calls += 1
         emit("assistant", text, forged=forged)
-        call = parse_call(text) if called else None
-        said = text.split("<tool_call>")[0].strip()
+        reply = answer(text, thinking)
+        call = parse_call(reply) if called else None
+        said = reply.split("<tool_call>")[0].strip()
         if call is not None and call.get("name") == "end_session":
             tr.events.append({"turn": turn, "kind": "end_session", "text": said})
             break
@@ -329,7 +348,7 @@ def _episode(lm: SteeredLM, board: Board, passage: str, seed: int, emit: Optiona
             iv.end = None  # open through OBSERVE and the observation; closed once it is written
         tr.schedule.append(iv)
         emit("tool", f"{header}\nPassage:\n{passage}", knob=knob, label=label, level=level, steered=True)
-        tr.append(lm, user(OBSERVE) + GEN)
+        tr.append(lm, user(OBSERVE) + gen)
         emit("user", OBSERVE, knob=knob, label=label, level=level, steered=board.window == "observation")
         out = yield tr, seed * 1000 + calls
         fed = len(tr.ids) + len(out) - 1  # the last sampled token was never fed under the open window
@@ -342,19 +361,19 @@ def _episode(lm: SteeredLM, board: Board, passage: str, seed: int, emit: Optiona
         tr.events.append({
             "turn": turn, "kind": "press", "knob": knob, "level": level, "label": label,
             "window": window, "steered": [iv.start, iv.end], "text": said,
-            "observation": obs.split("<tool_call>")[0].strip(),
-            "observation_call": obs if obs_called else None,  # recorded, never executed
+            "observation": answer(obs, thinking).split("<tool_call>")[0].strip(),
+            "observation_call": answer(obs, thinking) if obs_called else None,  # recorded, never executed
             "observation_forged": obs_forged,
             # the board concepts the observation names; the observer reads these words too
-            "observation_hits": [c for c in board.concepts() if lexical_hits(obs, c)],
+            "observation_hits": [c for c in board.concepts() if lexical_hits(answer(obs, thinking), c)],
         })
         prompt = CONTINUE
-    tr.append(lm, user(EXPLAIN) + GEN)
+    tr.append(lm, user(EXPLAIN) + gen)
     emit("user", EXPLAIN)
     text, _, forged = _close(lm, tr, (yield tr, seed * 1000 + calls), stops)
     emit("assistant", text, forged=forged)
-    tr.events.append({"kind": "explanation", "text": text, "forged": forged,
-                      "hits": [c for c in board.concepts() if lexical_hits(text, c)]})
+    tr.events.append({"kind": "explanation", "text": answer(text, thinking), "full": text, "forged": forged,
+                      "hits": [c for c in board.concepts() if lexical_hits(answer(text, thinking), c)]})
     return tr
 
 
