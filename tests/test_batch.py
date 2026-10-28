@@ -328,7 +328,8 @@ def test_reused_batch_with_select_and_compact_equals_fresh_generation(lm):
         assert out == lm.generate(q, s, 16, stop, temperature=0)
     with pytest.raises(AssertionError, match="covers cached tokens"):
         late = scheds[2] + [Intervention(layer, vec(lm), 0, 4)]
-        lm.generate_batch([qs[0] + more, qs[2] + more], [scheds[0], late], 1, temperature=0, batch=b)
+        lm.generate_batch([qs[0] + outs[0] + more, qs[2] + outs[1] + more], [scheds[0], late], 1,
+                          temperature=0, batch=b)
 
 
 @exact
