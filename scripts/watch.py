@@ -219,6 +219,10 @@ pre{margin:0;white-space:pre-wrap;word-break:break-word;font:inherit}
 .tool{background:var(--tool)} .steered{background:var(--steer);border:2px solid var(--steerb)}
 .ok{color:var(--ok)} .run{color:var(--run)}
 .board td{text-align:center}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(420px,1fr));gap:10px;margin-top:8px}
+.card{border:1px solid var(--line);border-radius:4px;padding:6px 8px;min-width:0}
+.card>.hd{font-weight:bold;margin-bottom:2px} .card .msg pre{max-height:14em;overflow:auto}
+body:has(.grid){max-width:none}
 """
 
 # keep the scroll position across the meta refresh; if we were at the bottom, follow the bottom
@@ -248,8 +252,68 @@ def page(title, body, follow=False):
     )
 
 
+def running(root, stale=900):
+    """Every episode, in any run, that is not done and wrote something in the last `stale` seconds."""
+    out = []
+    for name, meta in list_runs(root):
+        d = Path(root) / name
+        for ep in list_eps(d):
+            events = read_events(ep_path(d, ep))
+            s = summarize(events)
+            if not s["done"] and s["last"] and time.time() - s["last"] < stale:
+                out.append((name, meta, ep, events, s))
+    return out
+
+
+def last_msg(events):
+    return next((e for e in reversed(events) if e.get("type") == "msg"), None)
+
+
+def msg_head(e):
+    if e is None:
+        return "-"
+    lv = f" @ {e.get('level')}" if e.get("level") is not None else ""
+    k = f" · knob {e.get('knob')} = {label_of(e)}{lv}" if e.get("knob") is not None else ""
+    return f"{e.get('role', '?')}{k}"
+
+
+def render_running(root):
+    live = running(root)
+    out = [f"<h2>Running now <span class=dim>({len(live)} episodes &middot; <a href='/now'>see them all side by side</a>)"
+           "</span></h2>"]
+    if not live:
+        return out + ["<p class=dim>nothing running</p>"]
+    out.append("<table><tr><th>run</th><th>model</th><th>window</th><th>episode</th><th>presses</th>"
+               "<th>last message</th><th>latest</th></tr>")
+    for name, meta, ep, events, s in live:
+        e = last_msg(events)
+        out.append(
+            f"<tr><td>{esc(name)}</td><td>{esc(meta.get('model', '?'))}</td><td>{esc(meta.get('window', '-'))}</td>"
+            f"<td><a href='/run/{quote(name)}/{ep}'>ep{ep:03d}</a></td><td>{s['presses']}</td>"
+            f"<td>{esc(ago(s['last']))}</td><td>{esc(msg_head(e))}: {esc((e or {}).get('text', '')[:140])}</td></tr>")
+    return out + ["</table>"]
+
+
+def render_now(root, tail=6):
+    live = running(root)
+    out = ["<div><a href='/'>&larr; runs</a> &middot; <b>running now</b> &middot; "
+           f"{len(live)} episodes &middot; last {tail} messages each</div><div class=grid>"]
+    for name, meta, ep, events, s in live:
+        board = next((e for e in events if e.get("type") == "board"), None)
+        b = (board or {}).get("board") or {}
+        bline = " &middot; ".join(f"{esc(k)}={esc(b[k])}" for k in sorted(b, key=knob_key))
+        t0 = s["first"]
+        msgs = [render_msg(e, t0) for e in events if e.get("type") == "msg"][-tail:]
+        out.append(f"<div class=card><div class=hd><a href='/run/{quote(name)}/{ep}'>{esc(name)} ep{ep:03d}</a>"
+                   f" &middot; {s['presses']} presses &middot; {esc(ago(s['last']))}</div>"
+                   f"<div class=dim>{bline}</div>{''.join(msgs)}</div>")
+    if not live:
+        out.append("<p class=dim>nothing running</p>")
+    return page("running now", "".join(out) + "</div>")
+
+
 def render_index(root):
-    out = ["<h1>knob-ladder live runs</h1>"]
+    out = ["<h1>knob-ladder live runs</h1>"] + render_running(root)
     runs = list_runs(root)
     if not runs:
         out.append(f"<p class=dim>no runs under {esc(root)}</p>")
@@ -257,7 +321,7 @@ def render_index(root):
         d = Path(root) / name
         eps = list_eps(d)
         mline = " &middot; ".join(
-            f"{k}={esc(meta[k])}" for k in ("model", "layer", "alpha", "dose", "episodes") if k in meta)
+            f"{k}={esc(meta[k])}" for k in ("model", "layer", "alpha", "dose", "window", "episodes", "batch") if k in meta)
         started = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(meta["started"])) if isinstance(
             meta.get("started"), (int, float)) else "?"
         out.append(f"<h2>{esc(name)}</h2><div class=dim>started {esc(started)} &middot; {mline or 'no meta.json'}</div>")
@@ -351,6 +415,8 @@ def make_handler(root):
             try:
                 if path in ("/", ""):
                     return self._send(200, render_index(root))
+                if path == "/now":
+                    return self._send(200, render_now(root))
                 m = re.fullmatch(r"/run/([^/]+)/(\d+)", path)
                 if m:
                     run = unquote(m.group(1))

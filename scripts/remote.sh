@@ -14,7 +14,8 @@ ssh_="ssh -i $key -o StrictHostKeyChecking=accept-new"
 # The box gets no .git, so each sync writes REVISION: the commit, and "+dirty" with uncommitted changes.
 sync() {
   rsync -az --delete --exclude runs/ --exclude .git/ --exclude __pycache__/ --exclude .claude/ --exclude REVISION -e "$ssh_" "$here/" "$host:knob-ladder/"
-  rev=$(git -C "$here" rev-parse HEAD)$([ -n "$(git -C "$here" status --porcelain)" ] && echo +dirty)
+  rev=$(git -C "$here" rev-parse HEAD)
+  if [ -n "$(git -C "$here" status --porcelain)" ]; then rev=$rev+dirty; fi
   echo "$rev" | $ssh_ "$host" 'cat > knob-ladder/REVISION'
 }
 
