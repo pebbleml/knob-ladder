@@ -9,6 +9,10 @@ Writes one JSON line per episode to runs/, and every message as it happens to
 runs/live/<run>/ for scripts/watch.py (the model never reads either). The multiple choice,
 which shows the model the board's concepts, runs only with --choice; ownership trials (and
 the probe they need) only with --ownership.
+
+--batch N samples N episodes of the shard together (each with its own seed and schedule, so
+the same episodes as --batch 1 up to batched numerics) and batches their discovery branches;
+rows and live logs stay one per episode.
 """
 from __future__ import annotations
 
@@ -25,7 +29,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from knobladder.episode import (  # noqa: E402
-    CONTROLS, HYPERPARAMS, discovery, fixed_texts, preference_counts, press_counts, run_episode, shuffled_board,
+    CONTROLS, HYPERPARAMS, discovery, fixed_texts, preference_counts, press_counts, run_episodes, shuffled_board,
 )
 from knobladder.knobs import (  # noqa: E402
     CONCEPTS, concept_vectors, lexical_screen, load_screen, random_direction, residual_scale, resolve_run,
@@ -46,6 +50,9 @@ def main():
     ap.add_argument("--episodes", type=int, default=2)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--shard", default="0/1", help="i/n: run episodes e with e %% n == i (scripts/shards.sh)")
+    ap.add_argument("--batch", type=int, default=1, help="episodes sampled together, and discovery branches per forward")
+    ap.add_argument("--reuse-cache", action="store_true",
+                    help="keep each batch's KV cache across turns instead of re-prefilling every transcript")
     ap.add_argument("--choice", action="store_true", help="also score the multiple choice (names the concepts)")
     ap.add_argument("--ownership", action="store_true", help="also run ownership trials (trains the probe)")
     ap.add_argument("--probe-layer", type=float, default=0.75)
@@ -102,61 +109,74 @@ def main():
     live.mkdir(parents=True, exist_ok=True)
     (live / "meta.json").write_text(json.dumps({
         "run": run_id, "model": args.model, "layer": layer, "alpha": args.alpha, "dose": dose,
-        "episodes": args.episodes, "shard": args.shard, "started": time.time()}))
+        "episodes": args.episodes, "shard": args.shard, "batch": args.batch, "reuse_cache": args.reuse_cache,
+        "started": time.time()}))
+
+    def start(ep):
+        """An episode's board and live log. The seed depends only on ep, whatever the shard or batch."""
+        seed = args.seed * 100 + ep
+        rng = random.Random(seed)
+        passage_index = (args.seed + ep) % len(EPISODE_PASSAGES)  # balanced over passages
+        board = shuffled_board(
+            {w: vectors[w] for w in knob_words}, args.knobs, layer, dose, rng,
+            random_dir=random_direction(lm.d_model, seed),
+        )
+        log = (live / f"ep{ep:03d}.jsonl").open("a")
+
+        def note(kind, **fields):
+            log.write(json.dumps({"t": time.time(), "ep": ep, "type": kind, **fields}) + "\n")
+            log.flush()
+
+        def emit(role, text, knob=None, label=None, steered=False, **extra):
+            note("msg", role=role, text=text, knob=knob, label=label, steered=steered, **extra)
+
+        note("board", board={str(k): kb.label for k, kb in board.knobs.items()}, passage_index=passage_index)
+        return {"ep": ep, "seed": seed, "rng": rng, "passage_index": passage_index, "board": board,
+                "log": log, "note": note, "emit": emit}
+
+    eps = list(range(shard, args.episodes, shards))
     with out_path.open("w") as f:
-        for ep in range(shard, args.episodes, shards):  # an episode's seed depends only on ep
-            seed = args.seed * 100 + ep
-            rng = random.Random(seed)
-            passage_index = (args.seed + ep) % len(EPISODE_PASSAGES)  # balanced over passages
-            board = shuffled_board(
-                {w: vectors[w] for w in knob_words}, args.knobs, layer, dose, rng,
-                random_dir=random_direction(lm.d_model, seed),
-            )
-            log = (live / f"ep{ep:03d}.jsonl").open("a")
-
-            def note(kind, **fields):
-                log.write(json.dumps({"t": time.time(), "ep": ep, "type": kind, **fields}) + "\n")
-                log.flush()
-
-            def emit(role, text, knob=None, label=None, steered=False, **extra):
-                note("msg", role=role, text=text, knob=knob, label=label, steered=steered, **extra)
-
-            note("board", board={str(k): kb.label for k, kb in board.knobs.items()}, passage_index=passage_index)
+        for g in range(0, len(eps), args.batch):
+            group = [start(ep) for ep in eps[g:g + args.batch]]
             t0 = time.time()
-            tr = run_episode(lm, board, EPISODE_PASSAGES[passage_index], seed=seed, emit=emit)
-            disc = discovery(lm, board, tr, firsts, rng if args.choice else None)
-            note("discovery", rows=[{
-                "knob": d["knob"], "label": d["label"], "presses": d["presses"], "recall": d["recall"],
-                "readout": {c: {"rank": d["readout"][c]["ranks"].get(d["label"]), "top": d["readout"][c]["top"]}
-                            for c in ("cached", "observer")},
-            } for d in disc])
-            note("done", seconds=time.time() - t0)
-            log.close()
-            row = {
-                "episode": ep, "seed": seed, "model": args.model, "hyperparams": HYPERPARAMS,
-                "provenance": prov, "readout_candidates": knob_words, "raw_norm_ratio": raw_norm,
-                "passages_version": PASSAGES_VERSION, "passage_index": passage_index,
-                "layer": layer, "layer_frac": args.layer, "alpha": args.alpha, "dose": dose,
-                "screen": screen["path"], "calibration": str(calib_path) if calib_path else None,
-                "board": {k: kb.label for k, kb in board.knobs.items()},
-                "events": tr.events,
-                "presses": press_counts(tr),
-                "press_order": [e["knob"] for e in tr.events if e["kind"] == "press"],
-                "ended": any(e["kind"] == "end_session" for e in tr.events),
-                "preference": preference_counts(tr),
-                "discovery": disc,
-                "ownership": ownership_trials(lm, board, tr, probe, seed=seed) if args.ownership else None,
-                "transcript": lm.tok.decode(tr.ids),
-                "ids": tr.ids,
-                "schedule": [[iv.layer, iv.start, iv.end] for iv in tr.schedule],
-            }
-            f.write(json.dumps(row) + "\n")
-            f.flush()
-            deltas = [1 / d["readout"]["cached"]["ranks"][d["label"]] - 1 / d["readout"]["observer"]["ranks"][d["label"]]
-                      for d in disc if d["presses"] and d["label"] not in CONTROLS]
-            gap = f"{sum(deltas) / len(deltas):+.3f}" if deltas else "n/a"
-            print(f"episode {ep}: order {row['press_order']}, ended {row['ended']}, "
-                  f"cached-observer readout 1/rank on pressed concepts {gap}, {time.time() - t0:.0f}s")
+            trs = run_episodes(lm, [e["board"] for e in group], [EPISODE_PASSAGES[e["passage_index"]] for e in group],
+                               [e["seed"] for e in group], [e["emit"] for e in group], reuse_cache=args.reuse_cache)
+            for e, tr in zip(group, trs):
+                ep, seed, board, note = e["ep"], e["seed"], e["board"], e["note"]
+                disc = discovery(lm, board, tr, firsts, e["rng"] if args.choice else None, batch=args.batch)
+                note("discovery", rows=[{
+                    "knob": d["knob"], "label": d["label"], "presses": d["presses"], "recall": d["recall"],
+                    "readout": {c: {"rank": d["readout"][c]["ranks"].get(d["label"]), "top": d["readout"][c]["top"]}
+                                for c in ("cached", "observer")},
+                } for d in disc])
+                note("done", seconds=time.time() - t0)  # since the batch started
+                e["log"].close()
+                row = {
+                    "episode": ep, "seed": seed, "model": args.model, "hyperparams": HYPERPARAMS,
+                    "batch": args.batch, "reuse_cache": args.reuse_cache,
+                    "provenance": prov, "readout_candidates": knob_words, "raw_norm_ratio": raw_norm,
+                    "passages_version": PASSAGES_VERSION, "passage_index": e["passage_index"],
+                    "layer": layer, "layer_frac": args.layer, "alpha": args.alpha, "dose": dose,
+                    "screen": screen["path"], "calibration": str(calib_path) if calib_path else None,
+                    "board": {k: kb.label for k, kb in board.knobs.items()},
+                    "events": tr.events,
+                    "presses": press_counts(tr),
+                    "press_order": [ev["knob"] for ev in tr.events if ev["kind"] == "press"],
+                    "ended": any(ev["kind"] == "end_session" for ev in tr.events),
+                    "preference": preference_counts(tr),
+                    "discovery": disc,
+                    "ownership": ownership_trials(lm, board, tr, probe, seed=seed) if args.ownership else None,
+                    "transcript": lm.tok.decode(tr.ids),
+                    "ids": tr.ids,
+                    "schedule": [[iv.layer, iv.start, iv.end] for iv in tr.schedule],
+                }
+                f.write(json.dumps(row) + "\n")
+                f.flush()
+                deltas = [1 / d["readout"]["cached"]["ranks"][d["label"]] - 1 / d["readout"]["observer"]["ranks"][d["label"]]
+                          for d in disc if d["presses"] and d["label"] not in CONTROLS]
+                gap = f"{sum(deltas) / len(deltas):+.3f}" if deltas else "n/a"
+                print(f"episode {ep}: order {row['press_order']}, ended {row['ended']}, "
+                      f"cached-observer readout 1/rank on pressed concepts {gap}, {time.time() - t0:.0f}s")
     print(out_path)
 
 

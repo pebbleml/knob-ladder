@@ -23,7 +23,7 @@ from typing import Callable, Dict, List, Optional, Set, Tuple
 import torch
 
 from .knobs import lexical_hits, unit
-from .model import Intervention, SteeredLM
+from .model import Batch, Intervention, SteeredLM
 from .readout import ranks
 from .text import END, GEN, system, user
 
@@ -198,12 +198,17 @@ def _stops(lm: SteeredLM) -> List[int]:
 
 
 def _assistant(lm: SteeredLM, tr: Transcript, seed: int, stops: List[int]) -> Tuple[str, bool, bool]:
-    """Sample one assistant turn, close it, and return (text, ended on a tool call, forged).
+    """Sample one assistant turn, close it, and return (text, ended on a tool call, forged)."""
+    out = lm.generate(tr.ids, tr.schedule, MAX_NEW_TOKENS, stops,
+                      temperature=TEMPERATURE, top_p=TOP_P, top_k=TOP_K, seed=seed)
+    return _close(lm, tr, out, stops)
+
+
+def _close(lm: SteeredLM, tr: Transcript, out: List[int], stops: List[int]) -> Tuple[str, bool, bool]:
+    """Append a sampled assistant turn, close it, and return (text, ended on a tool call, forged).
 
     A turn that starts a message of its own or a tool response is cut before that token, so
     the model never reads a turn or passage it wrote itself."""
-    out = lm.generate(tr.ids, tr.schedule, MAX_NEW_TOKENS, stops,
-                      temperature=TEMPERATURE, top_p=TOP_P, top_k=TOP_K, seed=seed)
     forged = bool(out) and out[-1] in stops[2:]
     if forged:
         out = out[:-1]
@@ -219,6 +224,62 @@ Emit = Callable[..., None]  # emit(role, text, **fields): a live copy of each me
 
 def run_episode(lm: SteeredLM, board: Board, passage: str, seed: int = 0, emit: Optional[Emit] = None) -> Transcript:
     """Up to MAX_TURNS decisions. A press is: turn call, steered passage, an observation, next decision."""
+    return run_episodes(lm, [board], [passage], [seed], [emit])[0]
+
+
+def run_episodes(
+    lm: SteeredLM,
+    boards: List[Board],
+    passages: List[str],
+    seeds: List[int],
+    emits: Optional[List[Optional[Emit]]] = None,
+    reuse_cache: bool = False,
+) -> List[Transcript]:
+    """run_episode for several episodes at once. Each round samples the next assistant turn of every
+    unfinished episode in one batch, each with its own schedule and seed; an episode leaves the batch
+    when it ends, so each is the episode run_episode would run (up to batched numerics).
+
+    By default every round re-prefills each whole transcript, as run_episode always has. With
+    `reuse_cache` the batch keeps its KV cache across rounds and prefills only the new tokens. That is
+    the same computation: transcripts only grow, and a window is added to the schedule before its
+    passage is first fed, so no cached token would be steered differently by a re-prefill
+    (generate_batch asserts both)."""
+    emits = emits or [None] * len(boards)
+    eps = [_episode(lm, *a) for a in zip(boards, passages, seeds, emits)]
+    trs: List[Optional[Transcript]] = [None] * len(eps)
+    pending: Dict[int, Tuple[Transcript, int]] = {}
+
+    def advance(i: int, out: Optional[List[int]] = None):
+        try:
+            pending[i] = eps[i].send(out)
+        except StopIteration as stop:
+            trs[i] = stop.value
+            pending.pop(i, None)
+
+    for i in range(len(eps)):
+        advance(i)
+    stops = _stops(lm)
+    batch, rows = None, []
+    while pending:
+        live = sorted(pending)
+        if reuse_cache:
+            if batch is None:
+                batch, rows = Batch(len(live)), live
+            elif live != rows:
+                batch.select([rows.index(i) for i in live])
+                rows = live
+            batch.compact()
+        reqs = [pending[i] for i in live]
+        outs = lm.generate_batch([tr.ids for tr, _ in reqs], [tr.schedule for tr, _ in reqs], MAX_NEW_TOKENS, stops,
+                                 TEMPERATURE, TOP_P, TOP_K, [s for _, s in reqs], batch=batch)
+        for i, out in zip(live, outs):
+            advance(i, out)
+    return trs
+
+
+def _episode(lm: SteeredLM, board: Board, passage: str, seed: int, emit: Optional[Emit]):
+    """run_episode's body as a coroutine: yields (transcript, seed) for each assistant turn and is sent
+    the sampled tokens, so that run_episodes can sample many episodes' turns together."""
     emit = emit or (lambda role, text, **kw: None)
     tr = Transcript()
     sys_text = system_text(board.numbers())
@@ -230,7 +291,7 @@ def run_episode(lm: SteeredLM, board: Board, passage: str, seed: int = 0, emit: 
     for turn in range(MAX_TURNS):
         tr.append(lm, user(prompt) + GEN)
         emit("user", prompt)
-        text, called, forged = _assistant(lm, tr, seed * 1000 + calls, stops)
+        text, called, forged = _close(lm, tr, (yield tr, seed * 1000 + calls), stops)
         calls += 1
         emit("assistant", text, forged=forged)
         call = parse_call(text) if called else None
@@ -250,7 +311,7 @@ def run_episode(lm: SteeredLM, board: Board, passage: str, seed: int = 0, emit: 
         emit("tool", f"{header}\nPassage:\n{passage}", knob=knob, label=board.knobs[knob].label, steered=True)
         tr.append(lm, user(OBSERVE) + GEN)
         emit("user", OBSERVE)
-        obs, obs_called, obs_forged = _assistant(lm, tr, seed * 1000 + calls, stops)
+        obs, obs_called, obs_forged = _close(lm, tr, (yield tr, seed * 1000 + calls), stops)
         calls += 1
         emit("assistant", obs, forged=obs_forged)
         tr.events.append({
@@ -291,6 +352,7 @@ def discovery(
     tr: Transcript,
     firsts: Dict[str, Set[int]],
     rng: Optional[random.Random] = None,
+    batch: int = 1,
 ) -> List[Dict]:
     """For every knob, branches off the final transcript, each under cached and observer:
 
@@ -300,39 +362,40 @@ def discovery(
       concepts (or their associates) it names;
     - choice (only with `rng`): a multiple choice over the board's concepts + NOTHING. It shows
       the model the concepts, so it is off unless asked for.
+    With batch > 1 each condition prefills the transcript once and answers `batch` knobs at a time.
     """
     conds = (("cached", tr.schedule), ("observer", []))
     presses = press_counts(tr)
     stop = [lm.token_id("<|im_end|>")]
-    rows = []
-    for number in board.numbers():
-        label = board.knobs[number].label
-        row = {"knob": number, "label": label, "presses": presses.get(number, 0)}
-
-        ids = tr.ids + lm.encode(user(READOUT.format(k=number)) + GEN)
-        row["readout"], row["recall"] = {}, {}
-        for cond, sched in conds:
-            logits, _ = lm.score(ids, sched)  # the same logits as the answer's first greedy step
+    rows = [{"knob": n, "label": board.knobs[n].label, "presses": presses.get(n, 0), "readout": {}, "recall": {}}
+            for n in board.numbers()]
+    tails = [lm.encode(user(READOUT.format(k=row["knob"])) + GEN) for row in rows]
+    for cond, sched in conds:
+        for row, (logits, out) in zip(rows, _answers(lm, tr, sched, tails, RECALL_TOKENS, stop, batch)):
             r = ranks(logits, firsts)
             row["readout"][cond] = {"ranks": r, "top": sorted(r, key=r.get)[:5]}
-            row["recall"][cond] = lm.tok.decode(lm.generate(ids, sched, RECALL_TOKENS, stop, temperature=0),
-                                                skip_special_tokens=True).strip()
+            row["recall"][cond] = lm.tok.decode(out, skip_special_tokens=True).strip()
+    for row in rows:
         row["recall_hits"] = {
             cond: [c for c in board.concepts() if lexical_hits(text, c)] for cond, text in row["recall"].items()
         }
-        if rng is None:
-            rows.append(row)
-            continue
+    if rng is None:
+        return rows
 
+    tails = []
+    for row in rows:  # one shuffle per knob, in knob order
         options = board.concepts() + [NOTHING]
         rng.shuffle(options)
         listing = " ".join(f"{LETTERS[i]}) {o}" for i, o in enumerate(options)) + "."
-        ids = tr.ids + lm.encode(user(CHOICE.format(k=number, listing=listing)) + GEN)
-        letter_ids = [lm.token_id(LETTERS[i]) for i in range(len(options))]
+        tails.append(lm.encode(user(CHOICE.format(k=row["knob"], listing=listing)) + GEN))
+        label = row["label"]
         correct = None if label == "random" else (NOTHING if label == "sham" else label)
-        mc = {"options": options, "correct": correct, "chance": 1 / len(options)}
-        for cond, sched in conds:
-            logits, _ = lm.score(ids, sched)
+        row["choice"] = {"options": options, "correct": correct, "chance": 1 / len(options)}
+    letter_ids = [lm.token_id(LETTERS[i]) for i in range(len(board.concepts()) + 1)]
+    for cond, sched in conds:
+        for row, (logits, _) in zip(rows, _answers(lm, tr, sched, tails, 0, stop, batch)):
+            mc = row["choice"]
+            options, correct = mc["options"], mc["correct"]
             p = torch.softmax(logits[letter_ids], -1)
             mc[cond] = {
                 "probs": [float(x) for x in p],
@@ -340,6 +403,17 @@ def discovery(
                 "p_correct": None if correct is None else float(p[options.index(correct)]),
                 "p_nothing": float(p[options.index(NOTHING)]),
             }
-        row["choice"] = mc
-        rows.append(row)
     return rows
+
+
+def _answers(lm: SteeredLM, tr: Transcript, sched: List[Intervention], tails: List[List[int]], max_new: int,
+             stop: List[int], batch: int) -> List[Tuple[torch.Tensor, List[int]]]:
+    """(first-token logits, greedy answer) of the transcript + each tail."""
+    if batch > 1:
+        return lm.branches(tr.ids, sched, tails, max_new, stop, batch)
+    out = []
+    for tail in tails:
+        ids = tr.ids + tail
+        logits, _ = lm.score(ids, sched)  # the same logits as the answer's first greedy step
+        out.append((logits, lm.generate(ids, sched, max_new, stop, temperature=0) if max_new else []))
+    return out

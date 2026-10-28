@@ -68,7 +68,8 @@ knowing what a knob does beyond what an unsteered `observer` re-run of the same 
 - `knobladder/stats.py`: pure-Python bootstrap and tests, used by `scripts/analyze.py`.
 - `tests/`: the invariants. An empty schedule changes nothing; steering touches only its positions;
   generation matches prefill; a neuron write vector equals raising the neuron's activation; nothing the
-  model sees names a concept; with no steering, cached and observer scores are identical.
+  model sees names a concept; with no steering, cached and observer scores are identical; every row of a
+  batch (generation, episodes, discovery) equals its solo run and is steered only on its own window.
 
 ## Running
 
@@ -85,6 +86,21 @@ scripts/remote.sh HOST run python3 scripts/r0_pilot.py --model Qwen/Qwen3-32B --
 scripts/remote.sh HOST pull
 python3 scripts/analyze.py runs/r0_Qwen3-32B_*.jsonl
 ```
+
+Larger runs shard episodes over copies of the model (`scripts/shards.sh GPUS_PER_COPY ...`, episode e on
+copy e % n, logs in `runs/shard_<i>.log`) and sample `--batch` episodes per copy together. Each
+episode keeps its seed, row and live log whatever the shard or batch; `--batch 1` is the unbatched
+path. `--reuse-cache` keeps each batch's KV cache across turns instead of re-prefilling every transcript
+(an estimated 2x at 32B); it is off by default until `tests/test_batch.py` has passed on the box.
+
+```bash
+scripts/remote.sh HOST run python3 -m pytest tests/test_batch.py -q
+scripts/remote.sh HOST run scripts/shards.sh 2 --model Qwen/Qwen3-32B --dtype bfloat16 --screen latest --calibration latest --episodes 64 --batch 8
+scripts/remote.sh HOST run tail -n 3 runs/shard_*.log
+```
+
+Tests that load a model take the `lm` fixture and are marked `model`; without CUDA they skip, so on the
+Mac only the text and tensor tests run: `python3 -m pytest tests -q -m "not model"`.
 
 While episodes run, `scripts/remote.sh HOST watch` serves every episode's chat live at
 http://localhost:8008 (`scripts/watch.py`, which reads `runs/live/`; the model never reads it).
