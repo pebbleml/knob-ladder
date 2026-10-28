@@ -6,6 +6,10 @@ passage inside the tool response; the passage is identical on every press and st
 stops before the model writes, so the transcript carries no information about the knobs.
 The `observer` re-runs the same tokens with no steering: whatever the cached model knows
 about a knob beyond the observer has to come from its own steered states.
+
+Discovery never shows the model a list of concepts. It asks what each knob does, as free
+recall and as a one-word answer whose first-token logits we rank over the knob concepts
+the model is never shown. The multiple choice is kept only for a later, opt-in analysis.
 """
 from __future__ import annotations
 
@@ -13,12 +17,13 @@ import json
 import random
 import re
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Tuple
+from typing import Callable, Dict, List, Optional, Set, Tuple
 
 import torch
 
-from .knobs import unit
+from .knobs import lexical_hits, unit
 from .model import Intervention, SteeredLM
+from .readout import ranks
 from .text import END, GEN, system, user
 
 # Frozen hyperparameters (Qwen3 non-thinking defaults). Every output row records HYPERPARAMS.
@@ -67,6 +72,7 @@ OBSERVE = "Write one or two sentences about what you observed."
 CONTINUE = "Turn a knob, or call end_session when you are done."
 NUDGE = "Use the turn tool, or call end_session when you are done."
 RECALL = "What does knob {k} do? Answer in one sentence."
+READOUT = "What does knob {k} do? Answer with one word."
 CHOICE = "Which option best describes what knob {k} does? {listing} Reply with the letter only."
 TURNED = "Knob {k} turned."
 NOTHING = "nothing changed"
@@ -86,7 +92,7 @@ def fixed_texts(n: int = 7) -> List[str]:
     """Every fixed string the model sees in an episode (the passage aside), for the lexical screen."""
     pre, post = tool_response(TURNED)
     return [system_text(list(range(1, n + 1))), json.dumps(TOOLS), START, OBSERVE, CONTINUE, NUDGE,
-            RECALL, CHOICE, NOTHING, pre, post]
+            RECALL, READOUT, CHOICE, NOTHING, pre, post]
 
 
 def tool_response(header: str) -> Tuple[str, str]:
@@ -186,28 +192,47 @@ def append_passage(lm: SteeredLM, tr: Transcript, header: str, passage_ids: List
     return window
 
 
-def _assistant(lm: SteeredLM, tr: Transcript, seed: int, stops: List[int]) -> Tuple[str, bool]:
-    """Sample one assistant turn, close it, and return (text, ended on a tool call)."""
+def _stops(lm: SteeredLM) -> List[int]:
+    """</tool_call> and <|im_end|> end a turn; <|im_start|> or <tool_response> would forge a new one."""
+    return [lm.token_id(t) for t in ("</tool_call>", "<|im_end|>", "<|im_start|>", "<tool_response>")]
+
+
+def _assistant(lm: SteeredLM, tr: Transcript, seed: int, stops: List[int]) -> Tuple[str, bool, bool]:
+    """Sample one assistant turn, close it, and return (text, ended on a tool call, forged).
+
+    A turn that starts a message of its own or a tool response is cut before that token, so
+    the model never reads a turn or passage it wrote itself."""
     out = lm.generate(tr.ids, tr.schedule, MAX_NEW_TOKENS, stops,
                       temperature=TEMPERATURE, top_p=TOP_P, top_k=TOP_K, seed=seed)
+    forged = bool(out) and out[-1] in stops[2:]
+    if forged:
+        out = out[:-1]
     tr.append_ids(out)
-    called = bool(out) and out[-1] == stops[0]
+    called = bool(out) and out[-1] == stops[0] and not forged
     closed = bool(out) and out[-1] == stops[1]
     tr.append(lm, "\n" if closed else END)  # a call or a truncated turn still needs its im_end
-    return lm.tok.decode(out[:-1] if closed else out), called
+    return lm.tok.decode(out[:-1] if closed else out), called, forged
 
 
-def run_episode(lm: SteeredLM, board: Board, passage: str, seed: int = 0) -> Transcript:
+Emit = Callable[..., None]  # emit(role, text, **fields): a live copy of each message, for watching only
+
+
+def run_episode(lm: SteeredLM, board: Board, passage: str, seed: int = 0, emit: Optional[Emit] = None) -> Transcript:
     """Up to MAX_TURNS decisions. A press is: turn call, steered passage, an observation, next decision."""
+    emit = emit or (lambda role, text, **kw: None)
     tr = Transcript()
-    tr.append(lm, system(system_text(board.numbers()), TOOLS))
-    stops = [lm.token_id("</tool_call>"), lm.token_id("<|im_end|>")]
+    sys_text = system_text(board.numbers())
+    tr.append(lm, system(sys_text, TOOLS))
+    emit("system", sys_text)
+    stops = _stops(lm)
     passage_ids = lm.encode(passage)  # identical tokens on every press
     prompt, calls = START, 0
     for turn in range(MAX_TURNS):
         tr.append(lm, user(prompt) + GEN)
-        text, called = _assistant(lm, tr, seed * 1000 + calls, stops)
+        emit("user", prompt)
+        text, called, forged = _assistant(lm, tr, seed * 1000 + calls, stops)
         calls += 1
+        emit("assistant", text, forged=forged)
         call = parse_call(text) if called else None
         said = text.split("<tool_call>")[0].strip()
         if call is not None and call.get("name") == "end_session":
@@ -215,19 +240,27 @@ def run_episode(lm: SteeredLM, board: Board, passage: str, seed: int = 0) -> Tra
             break
         knob = turned_knob(call, board)
         if knob is None:
-            tr.events.append({"turn": turn, "kind": "invalid_call" if called else "no_call", "text": text})
+            kind = "forged" if forged else "invalid_call" if called else "no_call"
+            tr.events.append({"turn": turn, "kind": kind, "text": text})
             prompt = NUDGE
             continue
-        window = append_passage(lm, tr, TURNED.format(k=knob), passage_ids)
+        header = TURNED.format(k=knob)
+        window = append_passage(lm, tr, header, passage_ids)
         tr.schedule.append(Intervention(board.layer, board.vector(knob), *window))
+        emit("tool", f"{header}\nPassage:\n{passage}", knob=knob, label=board.knobs[knob].label, steered=True)
         tr.append(lm, user(OBSERVE) + GEN)
-        obs, obs_called = _assistant(lm, tr, seed * 1000 + calls, stops)
+        emit("user", OBSERVE)
+        obs, obs_called, obs_forged = _assistant(lm, tr, seed * 1000 + calls, stops)
         calls += 1
+        emit("assistant", obs, forged=obs_forged)
         tr.events.append({
             "turn": turn, "kind": "press", "knob": knob, "label": board.knobs[knob].label,
             "window": window, "text": said,
             "observation": obs.split("<tool_call>")[0].strip(),
             "observation_call": obs if obs_called else None,  # recorded, never executed
+            "observation_forged": obs_forged,
+            # the board concepts the observation names; the observer reads these words too
+            "observation_hits": [c for c in board.concepts() if lexical_hits(obs, c)],
         })
         prompt = CONTINUE
     return tr
@@ -252,9 +285,21 @@ def preference_counts(tr: Transcript) -> Dict[str, int]:
 LETTERS = "ABCDEFGHIJKLMNOP"
 
 
-def discovery(lm: SteeredLM, board: Board, tr: Transcript, rng: random.Random) -> List[Dict]:
-    """For every knob, two branches off the final transcript, each under cached and observer:
-    free recall (greedy text) and a multiple choice over the board's concepts + NOTHING."""
+def discovery(
+    lm: SteeredLM,
+    board: Board,
+    tr: Transcript,
+    firsts: Dict[str, Set[int]],
+    rng: Optional[random.Random] = None,
+) -> List[Dict]:
+    """For every knob, branches off the final transcript, each under cached and observer:
+
+    - recall: greedy one-sentence answer, and which board concepts (or associates) it names;
+    - readout: one-word answer; every candidate in `firsts` (the knob concepts, never shown
+      to the model) ranked by its first-token logit;
+    - choice (only with `rng`): a multiple choice over the board's concepts + NOTHING. It shows
+      the model the concepts, so it is off unless asked for.
+    """
     conds = (("cached", tr.schedule), ("observer", []))
     presses = press_counts(tr)
     stop = [lm.token_id("<|im_end|>")]
@@ -269,6 +314,19 @@ def discovery(lm: SteeredLM, board: Board, tr: Transcript, rng: random.Random) -
                                 skip_special_tokens=True).strip()
             for cond, sched in conds
         }
+        row["recall_hits"] = {
+            cond: [c for c in board.concepts() if lexical_hits(text, c)] for cond, text in row["recall"].items()
+        }
+
+        ids = tr.ids + lm.encode(user(READOUT.format(k=number)) + GEN)
+        row["readout"] = {}
+        for cond, sched in conds:
+            logits, _ = lm.score(ids, sched)
+            r = ranks(logits, firsts)
+            row["readout"][cond] = {"ranks": r, "top": sorted(r, key=r.get)[:5]}
+        if rng is None:
+            rows.append(row)
+            continue
 
         options = board.concepts() + [NOTHING]
         rng.shuffle(options)

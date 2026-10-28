@@ -133,7 +133,7 @@ def main():
     out = ROOT / "runs" / f"screen_{args.model.split('/')[-1]}_{time.strftime('%Y%m%d-%H%M%S')}.json"
     out.parent.mkdir(exist_ok=True)
     out.write_text(json.dumps({
-        "model": args.model, "layer": layer, "layer_frac": args.layer, "n_layers": lm.n_layers,
+        "model": args.model, "provenance": lm.provenance(), "layer": layer, "layer_frac": args.layer, "n_layers": lm.n_layers,
         "passages_version": PASSAGES_VERSION, "seed": args.seed, "max_cos": args.max_cos,
         "rule": {"top_rank": TOP_RANK, "z": Z, "max_flagged": MAX_FLAGGED},
         "concepts": CONCEPTS, "first_tokens": {w: sorted(t) for w, t in firsts.items()},

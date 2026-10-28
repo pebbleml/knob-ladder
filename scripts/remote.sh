@@ -4,13 +4,19 @@
 #   scripts/remote.sh ubuntu@1.2.3.4 setup
 #   scripts/remote.sh ubuntu@1.2.3.4 run python3 -m pytest tests -q
 #   scripts/remote.sh ubuntu@1.2.3.4 pull        # copy runs/ back
+#   scripts/remote.sh ubuntu@1.2.3.4 watch       # live episodes at http://localhost:8008
 set -euo pipefail
 host=$1; cmd=$2; shift 2
 here=$(cd "$(dirname "$0")/.." && pwd)
 key=~/.ssh/id_ed25519
 ssh_="ssh -i $key -o StrictHostKeyChecking=accept-new"
 
-sync() { rsync -az --delete --exclude runs/ --exclude .git/ --exclude __pycache__/ --exclude .claude/ -e "$ssh_" "$here/" "$host:knob-ladder/"; }
+# The box gets no .git, so each sync writes REVISION: the commit, and "+dirty" with uncommitted changes.
+sync() {
+  rsync -az --delete --exclude runs/ --exclude .git/ --exclude __pycache__/ --exclude .claude/ --exclude REVISION -e "$ssh_" "$here/" "$host:knob-ladder/"
+  rev=$(git -C "$here" rev-parse HEAD)$([ -n "$(git -C "$here" status --porcelain)" ] && echo +dirty)
+  echo "$rev" | $ssh_ "$host" 'cat > knob-ladder/REVISION'
+}
 
 case $cmd in
   setup)
@@ -20,6 +26,11 @@ case $cmd in
   run)
     sync
     $ssh_ "$host" "cd knob-ladder && $*"
+    ;;
+  watch)
+    sync
+    echo "open http://localhost:8008"
+    $ssh_ -t -L 8008:localhost:8008 "$host" "cd knob-ladder && python3 scripts/watch.py --port 8008"
     ;;
   pull)
     rsync -az -e "$ssh_" "$host:knob-ladder/runs/" "$here/runs/"

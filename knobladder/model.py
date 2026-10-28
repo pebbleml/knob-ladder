@@ -10,10 +10,20 @@ pass instead of replaying a conversation.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
 
 import torch
+import transformers
 from transformers import AutoModelForCausalLM, AutoTokenizer, DynamicCache
+
+# Pinned Hugging Face revisions, so every run of a model reads the same weights and tokenizer.
+REVISIONS = {
+    "Qwen/Qwen3-0.6B": "c1899de289a04d12100db370d81485cdf75e47ca",
+    "Qwen/Qwen3-4B": "1cfa9a7208912126459214e8b04321603b3df60c",
+    "Qwen/Qwen3-8B": "b968826d9c46dd6066d109eabc6255188de91218",
+    "Qwen/Qwen3-32B": "9216db5781bf21249d130ec9da846c4624c16137",
+}
 
 
 @dataclass
@@ -39,11 +49,12 @@ def default_device() -> str:
 
 
 class SteeredLM:
-    def __init__(self, name: str, device: Optional[str] = None, dtype=torch.float32):
+    def __init__(self, name: str, device: Optional[str] = None, dtype=torch.float32, revision: Optional[str] = None):
         self.name = name
+        self.revision = revision or REVISIONS.get(name)
         self.device = device or default_device()
-        self.tok = AutoTokenizer.from_pretrained(name)
-        self.model = AutoModelForCausalLM.from_pretrained(name, dtype=dtype)
+        self.tok = AutoTokenizer.from_pretrained(name, revision=self.revision)
+        self.model = AutoModelForCausalLM.from_pretrained(name, dtype=dtype, revision=self.revision)
         self.model.to(self.device).eval()
         self.layers = self.model.model.layers
         self.n_layers = len(self.layers)
@@ -54,6 +65,17 @@ class SteeredLM:
         self._captured: Dict[int, List[torch.Tensor]] = {}
         for i, layer in enumerate(self.layers):
             layer.register_forward_hook(self._hook(i))
+
+    def provenance(self) -> Dict:
+        """What produced a run: weights, numerics, library versions and the code revision."""
+        rev = Path(__file__).resolve().parents[1] / "REVISION"
+        return {
+            "model": self.name, "revision": self.revision, "dtype": str(self.model.dtype),
+            "attn_implementation": getattr(self.model.config, "_attn_implementation", None),
+            "device": torch.cuda.get_device_name() if self.device == "cuda" else self.device,
+            "torch": torch.__version__, "transformers": transformers.__version__,
+            "code": rev.read_text().strip() if rev.exists() else None,
+        }
 
     # -- hooks -------------------------------------------------------------
     def _hook(self, i: int):
@@ -108,10 +130,10 @@ class SteeredLM:
 
         Logits are for the last position, or (len(positions), vocab) when positions are given.
         """
-        self._set_schedule(schedule)
-        self._capture_layers = set(capture_layers)
-        self._captured = {}
         try:
+            self._set_schedule(schedule)
+            self._capture_layers = set(capture_layers)
+            self._captured = {}
             h = self._forward(ids, 0, None)
             logits = self.model.lm_head(h[-1] if positions is None else h[list(positions)]).float().cpu()
             caps = {k: torch.cat(v) for k, v in self._captured.items()}
@@ -137,10 +159,10 @@ class SteeredLM:
         """
         gen = torch.Generator().manual_seed(seed)
         stops = set(stop_ids) | {self.tok.eos_token_id}
-        self._set_schedule(schedule)
-        cache = DynamicCache()
         new: List[int] = []
         try:
+            self._set_schedule(schedule)
+            cache = DynamicCache()
             h = self._forward(ids, 0, cache)
             pos = len(ids)
             for _ in range(max_new_tokens):

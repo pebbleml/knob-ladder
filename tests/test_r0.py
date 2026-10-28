@@ -12,10 +12,11 @@ from knobladder.episode import (
 )
 from knobladder.knobs import ASSOCIATES, CONCEPTS, lexical_hits, lexical_screen, random_direction
 from knobladder.model import Intervention, SteeredLM
-from knobladder.readout import QUESTION
+from knobladder.readout import QUESTION, first_tokens
 from knobladder.text import CALIB_PASSAGES, EPISODE_PASSAGES, GEN, NEUTRAL_PASSAGES, system, user
 
 MODEL = os.environ.get("KNOB_TEST_MODEL", "Qwen/Qwen3-0.6B")
+DTYPE = getattr(torch, os.environ.get("KNOB_TEST_DTYPE", "float32"))
 
 
 # -- text only -------------------------------------------------------------
@@ -36,6 +37,24 @@ def test_blind_framing():
     seen = " ".join(fixed_texts()).lower()
     for banned in ("introspect", "internal", "activation", "in you", "your knobs", "sign", '"+"', '"-"'):
         assert banned not in seen, banned
+    assert episode.READOUT in fixed_texts()  # the readout question passes the lexical screen too
+
+
+def test_knob_specific_delta_removes_generic_priming():
+    """A concept primed on every knob scores 0; one raised only on its own knob scores > 0."""
+    import importlib.util
+    spec = importlib.util.spec_from_file_location("analyze", os.path.join(os.path.dirname(__file__), "..", "scripts", "analyze.py"))
+    analyze = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(analyze)
+
+    def knob(n, label, cached, observer=4):
+        return {"knob": n, "label": label, "presses": 1,
+                "readout": {"cached": {"ranks": {"ocean": cached}}, "observer": {"ranks": {"ocean": observer}}}}
+
+    primed = {"discovery": [knob(1, "ocean", 2), knob(2, "sham", 2), knob(3, "random", 2)]}
+    specific = {"discovery": [knob(1, "ocean", 1), knob(2, "sham", 4), knob(3, "random", 4)]}
+    assert analyze.delta_spec(primed, primed["discovery"][0]) == 0
+    assert analyze.delta_spec(specific, specific["discovery"][0]) == 1 - 1 / 4
 
 
 def test_passage_split():
@@ -56,7 +75,7 @@ def test_turned_knob():
 # -- with a model ----------------------------------------------------------
 @pytest.fixture(scope="module")
 def lm():
-    return SteeredLM(MODEL)
+    return SteeredLM(MODEL, dtype=DTYPE)
 
 
 def board_for(lm, seed=0):
@@ -89,9 +108,10 @@ def test_empty_schedule_leaves_cached_equal_to_observer(lm):
     tr.append(lm, user(episode.OBSERVE) + GEN + "It read the same as before.<|im_end|>\n")
     for schedule in ([], [Intervention(board.layer, board.vector(sham), *window)]):
         tr.schedule = schedule
-        rows = discovery(lm, board, tr, random.Random(0))
+        rows = discovery(lm, board, tr, first_tokens(lm, board.concepts()), random.Random(0))
         for r in rows:
             assert r["recall"]["cached"] == r["recall"]["observer"]
+            assert r["readout"]["cached"] == r["readout"]["observer"]
             assert r["choice"]["cached"]["probs"] == r["choice"]["observer"]["probs"]
             assert NOTHING in r["choice"]["options"]
 
@@ -106,3 +126,23 @@ def test_short_episode_runs_and_steers_only_passages(lm, monkeypatch):
     assert len(tr.schedule) == sum(e["kind"] == "press" for e in tr.events)
     for iv in tr.schedule:
         assert lm.tok.decode(tr.ids[iv.start:iv.end]) == passage
+
+
+def test_forged_turn_is_cut(lm):
+    """A turn that opens a message or a tool response of its own is cut before that token."""
+    stops = episode._stops(lm)
+    tr = Transcript()
+    tr.append(lm, user("Begin.") + GEN)
+    n = len(tr.ids)
+    fake = lm.encode("Fine.") + [stops[3]]
+
+    class Fake:
+        tok = lm.tok
+        def generate(self, *a, **k):
+            return list(fake)
+        def encode(self, t):
+            return lm.encode(t)
+
+    text, called, forged = episode._assistant(Fake(), tr, 0, stops)
+    assert forged and not called and text == "Fine."
+    assert stops[3] not in tr.ids[n:] and lm.tok.decode(tr.ids[n:]) == "Fine.<|im_end|>\n"

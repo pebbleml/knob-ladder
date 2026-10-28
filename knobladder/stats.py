@@ -21,9 +21,9 @@ def bootstrap_ci(xs: Sequence[float], n: int = 2000, seed: int = 0, level: float
     return lo, hi
 
 
-def sign_test(xs: Sequence[float]) -> float:
-    """Two-sided exact binomial p-value for the signs of xs (zeros dropped)."""
-    pos, neg = sum(x > 0 for x in xs), sum(x < 0 for x in xs)
+def sign_test(xs: Sequence[float], tol: float = 0.01) -> float:
+    """Two-sided exact binomial p-value for the signs of xs (|x| <= tol counts as a tie and is dropped)."""
+    pos, neg = sum(x > tol for x in xs), sum(x < -tol for x in xs)
     m = pos + neg
     if m == 0:
         return 1.0

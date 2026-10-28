@@ -24,9 +24,12 @@ knowing what a knob does beyond what an unsteered `observer` re-run of the same 
 - **Concepts.** 64 neutral, imageable candidate nouns (`CONCEPTS`) with hand-written `ASSOCIATES`; a
   lexical screen checks no passage or fixed prompt contains any of them. Concept vectors average 5
   prompt templates, mean-subtracted over all candidates within each template.
-- **Discovery scoring.** For every knob (pressed or not), two branches off the final transcript, each
+- **Discovery scoring.** For every knob (pressed or not), branches off the final transcript, each
   under the cached (steered) and observer runs: free recall ("What does knob k do?", greedy) and a
-  multiple choice over the 5 board concepts plus "nothing changed" (letter probabilities).
+  one-word answer whose first-token logits rank the 32 knob concepts. The model never sees a
+  concept list; the multiple choice over the board concepts runs only with `--choice`.
+- **Forged turns.** If the model writes `<|im_start|>` or `<tool_response>` itself, the turn is cut
+  before that token, so it never reads a turn or passage it made up.
 - **Frozen hyperparameters** (`knobladder/episode.py`, recorded in every row): temperature 0.7, top-p
   0.8, top-k 20 (Qwen3 non-thinking defaults), thinking off, 256 new tokens per generation, 24 decision
   turns per episode, fixed seeds. Ownership trials stay in the code but are off (`--ownership`).
@@ -38,12 +41,18 @@ knowing what a knob does beyond what an unsteered `observer` re-run of the same 
   better than the concept's mean rank, or a passage-residual cosine 2.5 SD above the concept's mean. Concepts flagged on 2+ passages are dropped;
   16 calibration and 32 knob concepts are drawn from the rest, preferring pairwise cosine < 0.3.
 - **G1 calibration** (`scripts/calibrate.py`): calibration concepts and passages only. Silent-window
-  topic readout (MRR among the 16, chance 0.211) and passage dNLL per (layer, alpha). Passes if the
-  best (layer, alpha) with dNLL <= 1 has an MRR CI above the unsteered baseline's CI.
+  topic readout (MRR among the 16, chance 0.211) and passage dNLL per (layer, alpha). `best` is
+  chosen on calibration passages 0-3 (dNLL <= 1) and scored on 4-7 alone; it passes if that
+  held-out CI is above chance and the baseline's CI. `--open` is the Lindsey-style positive control.
+- **Preflight** (`scripts/preflight.py`): hook parity (exact +v at layer L+1 on the window only; an
+  independent hook with introspection-mechanisms semantics gives the same logits) and accumulation
+  (MRR after 0-3 steered copies of a passage). A failed G1 or preflight is reported, not a stop.
 - **G2 episodes** (`scripts/r0_pilot.py`): free play with the screen's knob concepts at the G1 dose.
-- **G3 discovery** (`scripts/analyze.py`): mean over pressed concept knobs of p_cached(correct) -
-  p_observer(correct), bootstrap CI over episodes, sign and permutation tests; argmax accuracy against
-  chance 1/6; sham false alarms; the same for knobs pressed 2+ times; quotes for the top knobs.
+- **G3 discovery** (`scripts/analyze.py`): primary is the knob-specific gain Δ_spec: for a pressed
+  concept knob k carrying c, (cached - observer 1/rank of c asked about k) minus the same asked about
+  the other knobs, which removes general priming. Bootstrap CI over episodes, sign and sign-flip
+  tests; observer-only accuracy and concept words in observations (what the transcript gives away);
+  free-recall hits; the same for knobs pressed 2+ times; quotes for the top knobs.
 
 ## Layout
 
@@ -64,7 +73,9 @@ knowing what a knob does beyond what an unsteered `observer` re-run of the same 
 ## Running
 
 Run everything remotely on a Lambda GPU box, never on the Mac (`scripts/remote.sh HOST setup` first).
-`latest` picks the newest matching file in the box's `runs/`.
+`latest` picks the newest matching file in the box's `runs/`; the pilot asserts that the screen and
+calibration belong together. Model revisions are pinned (`model.REVISIONS`), and every output records
+its provenance, including the commit `remote.sh` writes to the box's `REVISION`.
 
 ```bash
 scripts/remote.sh HOST run python3 -m pytest tests -q
@@ -74,6 +85,9 @@ scripts/remote.sh HOST run python3 scripts/r0_pilot.py --model Qwen/Qwen3-32B --
 scripts/remote.sh HOST pull
 python3 scripts/analyze.py runs/r0_Qwen3-32B_*.jsonl
 ```
+
+While episodes run, `scripts/remote.sh HOST watch` serves every episode's chat live at
+http://localhost:8008 (`scripts/watch.py`, which reads `runs/live/`; the model never reads it).
 
 Piloting is on Qwen3-4B, then 8B; 32B is the primary. `docs/knob-ladder-board.html` is the experiment
 overview (published at https://claude.ai/artifact/Pab6t9nHkHraM47ZE4G2GV); it lays out the v2 protocol with prompts and code copied from source.

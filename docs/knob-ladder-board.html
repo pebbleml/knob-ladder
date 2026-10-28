@@ -160,7 +160,7 @@ footer { color: var(--muted); font-size: 12.5px; border-top: 1px solid var(--lin
   <h2>Launch check: can we run 32B today?</h2>
   <div class="panel alert">
     <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><span class="pill warn">not yet</span><b>Checked the Lambda console at 21:18 on 2026-10-28, read-only.</b></div>
-    <p>Every 80 GB card was out of capacity at that time. Only the A10 could be selected. Capacity on Lambda changes minute to minute, so the H100 you saw may already be gone, or it may come back. Nothing was launched, and no instances are running.</p>
+    <p>Every 80 GB card was out of capacity at that time. Only the A10 could be selected. Sam is getting an H100 in the console. Nothing has been launched by Claude, and nothing launches before an instance is up and approved.</p>
   </div>
   <div class="tablewrap">
     <table>
@@ -218,7 +218,7 @@ footer { color: var(--muted); font-size: 12.5px; border-top: 1px solid var(--lin
     <div class="step"><span class="n">each press · 1</span><h3>Model calls turn</h3><p>It writes <code>turn(knob)</code>. Nothing it writes is steered.</p></div>
     <div class="step steer"><span class="n">each press · 2</span><h3>Silent window</h3><p>The tool response is "Knob k turned." plus the passage. Only the passage tokens get the knob's vector, at one layer.</p></div>
     <div class="step"><span class="n">each press · 3</span><h3>It observes</h3><p>"Write one or two sentences about what you observed." Then "Turn a knob, or call end_session…".</p></div>
-    <div class="step"><span class="n">after ≤ 24 turns</span><h3>Discovery</h3><p>For each of the 7 knobs: free recall and a 6-way multiple choice, each scored with the steering (cached) and without it (observer).</p></div>
+    <div class="step"><span class="n">after ≤ 24 turns</span><h3>Discovery</h3><p>For each of the 7 knobs: free recall and a one-word answer to "What does knob k do?", each scored with the steering (cached) and without it (observer). The model is never shown a list of concepts.</p></div>
   </div>
   <div class="sub">
     <h3>One press, exactly as the model's token stream is built</h3>
@@ -306,7 +306,7 @@ class Intervention:
   <div class="tablewrap">
     <table>
       <thead><tr><th>Name</th><th>Exact text</th><th>Where</th></tr></thead>
-      <tbody><tr><td class='mono'>SYSTEM</td><td><code class='q'>There are {count} knobs, numbered {first} to {last}. Use the turn tool to turn a knob. After each turn you will see a passage. Find out what each knob does. After each passage, write one or two sentences about what you observed. Call end_session when you are done.</code></td><td>System prompt; {count}=seven, {first}=1, {last}=7</td></tr><tr><td class='mono'>START</td><td><code class='q'>Begin.</code></td><td>First user turn</td></tr><tr><td class='mono'>TURNED</td><td><code class='q'>Knob {k} turned.</code></td><td>Header inside every tool response</td></tr><tr><td class='mono'>OBSERVE</td><td><code class='q'>Write one or two sentences about what you observed.</code></td><td>User turn after each passage</td></tr><tr><td class='mono'>CONTINUE</td><td><code class='q'>Turn a knob, or call end_session when you are done.</code></td><td>User turn after each observation</td></tr><tr><td class='mono'>NUDGE</td><td><code class='q'>Use the turn tool, or call end_session when you are done.</code></td><td>After a missing or invalid call</td></tr><tr><td class='mono'>RECALL</td><td><code class='q'>What does knob {k} do? Answer in one sentence.</code></td><td>Discovery, free recall (greedy, 60 tokens)</td></tr><tr><td class='mono'>CHOICE</td><td><code class='q'>Which option best describes what knob {k} does? {listing} Reply with the letter only.</code></td><td>Discovery, multiple choice (letter probabilities)</td></tr><tr><td class='mono'>NOTHING</td><td><code class='q'>nothing changed</code></td><td>The sixth option; correct answer for the sham</td></tr><tr><td class='mono'>QUESTION</td><td><code class='q'>Name the one topic that was most on your mind while you read that passage. Answer with one word.</code></td><td>G0 / G1 topic readout only, never in episodes</td></tr></tbody>
+      <tbody><tr><td class='mono'>SYSTEM</td><td><code class='q'>There are {count} knobs, numbered {first} to {last}. Use the turn tool to turn a knob. After each turn you will see a passage. Find out what each knob does. After each passage, write one or two sentences about what you observed. Call end_session when you are done.</code></td><td>System prompt; {count}=seven, {first}=1, {last}=7</td></tr><tr><td class='mono'>START</td><td><code class='q'>Begin.</code></td><td>First user turn</td></tr><tr><td class='mono'>TURNED</td><td><code class='q'>Knob {k} turned.</code></td><td>Header inside every tool response</td></tr><tr><td class='mono'>OBSERVE</td><td><code class='q'>Write one or two sentences about what you observed.</code></td><td>User turn after each passage</td></tr><tr><td class='mono'>CONTINUE</td><td><code class='q'>Turn a knob, or call end_session when you are done.</code></td><td>User turn after each observation</td></tr><tr><td class='mono'>NUDGE</td><td><code class='q'>Use the turn tool, or call end_session when you are done.</code></td><td>After a missing or invalid call</td></tr><tr><td class='mono'>RECALL</td><td><code class='q'>What does knob {k} do? Answer in one sentence.</code></td><td>Discovery, free recall (greedy, 60 tokens)</td></tr><tr><td class='mono'>READOUT</td><td><code class='q'>What does knob {k} do? Answer with one word.</code></td><td>Discovery, one-word answer; first-token logits ranked over unseen candidates</td></tr><tr><td class='mono'>CHOICE</td><td><code class='q'>Which option best describes what knob {k} does? {listing} Reply with the letter only.</code></td><td>Off by default (--choice): multiple choice naming the board concepts</td></tr><tr><td class='mono'>NOTHING</td><td><code class='q'>nothing changed</code></td><td>The sixth option; correct answer for the sham</td></tr><tr><td class='mono'>QUESTION</td><td><code class='q'>Name the one topic that was most on your mind while you read that passage. Answer with one word.</code></td><td>G0 / G1 topic readout only, never in episodes</td></tr></tbody>
     </table>
   </div>
   <div class="sub">
@@ -340,14 +340,14 @@ What does knob 4 do? Answer in one sentence.&lt;|im_end|&gt;
 &lt;/think&gt;
 
 </pre><p class="cap">Greedy decoding, up to 60 tokens, once cached and once observer.</p></div>
-    <div class="sub"><h3>Discovery: multiple choice (knob 4 shown)</h3><pre class="raw">&lt;|im_start|&gt;user
-Which option best describes what knob 4 does? A) ‹concept› B) ‹concept› C) nothing changed D) ‹concept› E) ‹concept› F) ‹concept›. Reply with the letter only.&lt;|im_end|&gt;
+    <div class="sub"><h3>Discovery: one-word readout (knob 4 shown)</h3><pre class="raw">&lt;|im_start|&gt;user
+What does knob 4 do? Answer with one word.&lt;|im_end|&gt;
 &lt;|im_start|&gt;assistant
 &lt;think&gt;
 
 &lt;/think&gt;
 
-</pre><p class="cap">The options are the board's 5 concepts plus "nothing changed", shuffled per knob, and the position of "nothing changed" varies. The angle-bracket items are placeholders. We read the softmax over the six letter tokens; nothing is sampled.</p></div>
+</pre><p class="cap">Nothing is sampled. We rank the 32 knob concepts by their first-token logits at the answer position. The list exists only in our scoring code; the model never sees it. The multiple choice (which shows the 5 board concepts) is off, and runs only with <code>--choice</code> if we want it later.</p></div>
   </div>
   <div class="grid2">
     <div class="sub"><h3>G0 / G1 topic readout (never shown in episodes)</h3><pre class="raw">&lt;|im_start|&gt;user
@@ -478,7 +478,8 @@ def residual_scale(lm: SteeredLM, layer: int, texts: Sequence[str] = CALIB_PASSA
     <div class="sub"><h3>Dose in the episode script</h3><pre class="code">    layer = int(args.layer * lm.n_layers)
     knob_words = screen[&quot;knobs&quot;]
     vectors = concept_vectors(lm, CONCEPTS, layer)
-<span class="hl">    dose = args.alpha * residual_scale(lm, layer)</span></pre>
+    scale = residual_scale(lm, layer)
+<span class="hl">    dose = args.alpha * scale</span></pre>
       <p class="cap">On 32B the dose is recomputed from that model's own residual norms. No number carries over from 4B or 8B.</p></div>
   </div>
   <div class="sub">
@@ -532,14 +533,24 @@ def shuffled_board(
     <div class="sub"><h3>Per-episode loop in <code>scripts/r0_pilot.py</code></h3><pre class="code">        for ep in range(args.episodes):
             seed = args.seed * 100 + ep
             rng = random.Random(seed)
-<span class="hl">            passage_index = rng.randrange(len(EPISODE_PASSAGES))</span>
+            passage_index = (args.seed + ep) % len(EPISODE_PASSAGES)  # balanced over passages
 <span class="hl">            board = shuffled_board(</span>
                 {w: vectors[w] for w in knob_words}, args.knobs, layer, dose, rng,
                 random_dir=random_direction(lm.d_model, seed),
             )
+            log = (live / f&quot;ep{ep:03d}.jsonl&quot;).open(&quot;a&quot;)
+
+            def note(kind, **fields):
+                log.write(json.dumps({&quot;t&quot;: time.time(), &quot;ep&quot;: ep, &quot;type&quot;: kind, **fields}) + &quot;\n&quot;)
+                log.flush()
+
+            def emit(role, text, knob=None, label=None, steered=False, **extra):
+                note(&quot;msg&quot;, role=role, text=text, knob=knob, label=label, steered=steered, **extra)
+
+            note(&quot;board&quot;, board={str(k): kb.label for k, kb in board.knobs.items()}, passage_index=passage_index)
             t0 = time.time()
-            tr = run_episode(lm, board, EPISODE_PASSAGES[passage_index], seed=seed)
-            disc = discovery(lm, board, tr, rng)</pre>
+            tr = run_episode(lm, board, EPISODE_PASSAGES[passage_index], seed=seed, emit=emit)
+            disc = discovery(lm, board, tr, firsts, rng if args.choice else None)</pre>
       <p class="cap">Each episode seeds its own RNG, which picks the passage, the 5 concepts, the knob numbers and the random direction. The board's labels go only to the output JSON. Nothing the model sees depends on them.</p></div>
   </div>
   <div class="sub"><h3><code>append_passage</code> and <code>run_episode</code>: where a press becomes an intervention</h3><pre class="code">def append_passage(lm: SteeredLM, tr: Transcript, header: str, passage_ids: List[int]) -&gt; Tuple[int, int]:
@@ -551,17 +562,22 @@ def shuffled_board(
     return window
 
 
-def run_episode(lm: SteeredLM, board: Board, passage: str, seed: int = 0) -&gt; Transcript:
+def run_episode(lm: SteeredLM, board: Board, passage: str, seed: int = 0, emit: Optional[Emit] = None) -&gt; Transcript:
     &quot;&quot;&quot;Up to MAX_TURNS decisions. A press is: turn call, steered passage, an observation, next decision.&quot;&quot;&quot;
+    emit = emit or (lambda role, text, **kw: None)
     tr = Transcript()
-    tr.append(lm, system(system_text(board.numbers()), TOOLS))
-    stops = [lm.token_id(&quot;&lt;/tool_call&gt;&quot;), lm.token_id(&quot;&lt;|im_end|&gt;&quot;)]
+    sys_text = system_text(board.numbers())
+    tr.append(lm, system(sys_text, TOOLS))
+    emit(&quot;system&quot;, sys_text)
+    stops = _stops(lm)
     passage_ids = lm.encode(passage)  # identical tokens on every press
     prompt, calls = START, 0
     for turn in range(MAX_TURNS):
         tr.append(lm, user(prompt) + GEN)
-        text, called = _assistant(lm, tr, seed * 1000 + calls, stops)
+        emit(&quot;user&quot;, prompt)
+        text, called, forged = _assistant(lm, tr, seed * 1000 + calls, stops)
         calls += 1
+        emit(&quot;assistant&quot;, text, forged=forged)
         call = parse_call(text) if called else None
         said = text.split(&quot;&lt;tool_call&gt;&quot;)[0].strip()
         if call is not None and call.get(&quot;name&quot;) == &quot;end_session&quot;:
@@ -569,19 +585,27 @@ def run_episode(lm: SteeredLM, board: Board, passage: str, seed: int = 0) -&gt; 
             break
         knob = turned_knob(call, board)
         if knob is None:
-            tr.events.append({&quot;turn&quot;: turn, &quot;kind&quot;: &quot;invalid_call&quot; if called else &quot;no_call&quot;, &quot;text&quot;: text})
+            kind = &quot;forged&quot; if forged else &quot;invalid_call&quot; if called else &quot;no_call&quot;
+            tr.events.append({&quot;turn&quot;: turn, &quot;kind&quot;: kind, &quot;text&quot;: text})
             prompt = NUDGE
             continue
-<span class="hl">        window = append_passage(lm, tr, TURNED.format(k=knob), passage_ids)</span>
+        header = TURNED.format(k=knob)
+<span class="hl">        window = append_passage(lm, tr, header, passage_ids)</span>
 <span class="hl">        tr.schedule.append(Intervention(board.layer, board.vector(knob), *window))</span>
+        emit(&quot;tool&quot;, f&quot;{header}\nPassage:\n{passage}&quot;, knob=knob, label=board.knobs[knob].label, steered=True)
         tr.append(lm, user(OBSERVE) + GEN)
-        obs, obs_called = _assistant(lm, tr, seed * 1000 + calls, stops)
+        emit(&quot;user&quot;, OBSERVE)
+        obs, obs_called, obs_forged = _assistant(lm, tr, seed * 1000 + calls, stops)
         calls += 1
+        emit(&quot;assistant&quot;, obs, forged=obs_forged)
         tr.events.append({
             &quot;turn&quot;: turn, &quot;kind&quot;: &quot;press&quot;, &quot;knob&quot;: knob, &quot;label&quot;: board.knobs[knob].label,
             &quot;window&quot;: window, &quot;text&quot;: said,
             &quot;observation&quot;: obs.split(&quot;&lt;tool_call&gt;&quot;)[0].strip(),
             &quot;observation_call&quot;: obs if obs_called else None,  # recorded, never executed
+            &quot;observation_forged&quot;: obs_forged,
+            # the board concepts the observation names; the observer reads these words too
+            &quot;observation_hits&quot;: [c for c in board.concepts() if lexical_hits(obs, c)],
         })
         prompt = CONTINUE
     return tr</pre></div>
@@ -590,9 +614,21 @@ def run_episode(lm: SteeredLM, board: Board, passage: str, seed: int = 0) -&gt; 
 <section id="scoring">
   <h2>Scoring and analysis</h2>
   <div class="grid2">
-    <div class="sub"><h3><code>discovery</code></h3><pre class="code">def discovery(lm: SteeredLM, board: Board, tr: Transcript, rng: random.Random) -&gt; List[Dict]:
-    &quot;&quot;&quot;For every knob, two branches off the final transcript, each under cached and observer:
-    free recall (greedy text) and a multiple choice over the board&#x27;s concepts + NOTHING.&quot;&quot;&quot;
+    <div class="sub"><h3><code>discovery</code></h3><pre class="code">def discovery(
+    lm: SteeredLM,
+    board: Board,
+    tr: Transcript,
+    firsts: Dict[str, Set[int]],
+    rng: Optional[random.Random] = None,
+) -&gt; List[Dict]:
+    &quot;&quot;&quot;For every knob, branches off the final transcript, each under cached and observer:
+
+    - recall: greedy one-sentence answer, and which board concepts (or associates) it names;
+    - readout: one-word answer; every candidate in `firsts` (the knob concepts, never shown
+      to the model) ranked by its first-token logit;
+    - choice (only with `rng`): a multiple choice over the board&#x27;s concepts + NOTHING. It shows
+      the model the concepts, so it is off unless asked for.
+    &quot;&quot;&quot;
 <span class="hl">    conds = ((&quot;cached&quot;, tr.schedule), (&quot;observer&quot;, []))</span>
     presses = press_counts(tr)
     stop = [lm.token_id(&quot;&lt;|im_end|&gt;&quot;)]
@@ -607,13 +643,26 @@ def run_episode(lm: SteeredLM, board: Board, passage: str, seed: int = 0) -&gt; 
                                 skip_special_tokens=True).strip()
             for cond, sched in conds
         }
+        row[&quot;recall_hits&quot;] = {
+            cond: [c for c in board.concepts() if lexical_hits(text, c)] for cond, text in row[&quot;recall&quot;].items()
+        }
+
+        ids = tr.ids + lm.encode(user(READOUT.format(k=number)) + GEN)
+        row[&quot;readout&quot;] = {}
+        for cond, sched in conds:
+            logits, _ = lm.score(ids, sched)
+<span class="hl">            r = ranks(logits, firsts)</span>
+            row[&quot;readout&quot;][cond] = {&quot;ranks&quot;: r, &quot;top&quot;: sorted(r, key=r.get)[:5]}
+        if rng is None:
+            rows.append(row)
+            continue
 
         options = board.concepts() + [NOTHING]
         rng.shuffle(options)
         listing = &quot; &quot;.join(f&quot;{LETTERS[i]}) {o}&quot; for i, o in enumerate(options)) + &quot;.&quot;
         ids = tr.ids + lm.encode(user(CHOICE.format(k=number, listing=listing)) + GEN)
         letter_ids = [lm.token_id(LETTERS[i]) for i in range(len(options))]
-<span class="hl">        correct = None if label == &quot;random&quot; else (NOTHING if label == &quot;sham&quot; else label)</span>
+        correct = None if label == &quot;random&quot; else (NOTHING if label == &quot;sham&quot; else label)
         mc = {&quot;options&quot;: options, &quot;correct&quot;: correct, &quot;chance&quot;: 1 / len(options)}
         for cond, sched in conds:
             logits, _ = lm.score(ids, sched)
@@ -630,14 +679,14 @@ def run_episode(lm: SteeredLM, board: Board, passage: str, seed: int = 0) -&gt; 
     <div class="sub">
       <h3>What counts as a result (G3, <code>scripts/analyze.py</code>)</h3>
       <ul>
-        <li><b>Primary.</b> For each episode, take the mean over pressed concept knobs of p_cached(correct) − p_observer(correct) on the multiple choice. Report a bootstrap 95% CI over episodes, a sign test and a sign-flip permutation test. A positive result is a CI that excludes 0.</li>
-        <li>Argmax accuracy, cached against observer, with chance at 1/6.</li>
-        <li>Sham false alarms: 1 − p(nothing changed), cached against observer.</li>
-        <li>The same primary metric restricted to knobs pressed 2 or more times.</li>
-        <li>Control: unpressed concept knobs should show no gap, because nothing steered them.</li>
-        <li>Quotes: the observations, plus cached and observer recall, for the top-scoring knobs.</li>
+        <li><b>Primary: knob-specific gain, Δ_spec.</b> On the one-word readout, rr = 1/rank among the 32 knob concepts, and Δ(c|j) = rr_cached(c|j) − rr_observer(c|j) when asking about knob j. For a pressed concept knob k carrying c: Δ_spec = Δ(c|k) − mean over the other knobs j of Δ(c|j). An injected concept that is primed in general, whatever knob is asked about, scores 0. Mean per episode over pressed concept knobs, bootstrap 95% CI over episodes, sign test (|Δ| ≤ 0.01 counts as a tie) and sign-flip test. A positive result is a CI that excludes 0.</li>
+        <li>Raw Δ(c|k), uncorrected, alongside.</li>
+        <li>Top-1 and MRR, cached and observer separately, against chance (1/32 and 0.13). The observer's own score measures what the transcript alone gives away.</li>
+        <li>How often observations name the pressed concept (lexical screen), since the observer reads them too.</li>
+        <li>Free recall: how often it names the knob's concept, cached against observer.</li>
+        <li>The same restricted to knobs pressed 2 or more times; unpressed concept knobs as a control; quotes for the top knobs by Δ_spec.</li>
       </ul>
-      <p class="cap">Recall and multiple choice each branch separately off the final transcript, so the option list never leaks into recall. Both conditions see identical tokens; the only difference is the steering schedule.</p>
+      <p class="cap">Recall and readout each branch separately off the final transcript. Both conditions see identical tokens; the only difference is the steering schedule.</p>
       <div class="sub" style="gap:6px">
         <h3>Frozen hyperparameters</h3>
         <div class="tablewrap"><table><tbody>
@@ -676,15 +725,20 @@ def run_episode(lm: SteeredLM, board: Board, passage: str, seed: int = 0) -&gt; 
     </div>
     <div class="sub">
       <h3>G1 · calibration <code>scripts/calibrate.py</code></h3>
-      <p class="cap">This uses calibration concepts and passages only. It sweeps layers at 0.5–0.9 depth and α ∈ {0.25, 0.5, 1, 2}. Each of the 16 concepts is injected over the passage only, and we measure the topic-readout MRR among the 16 (chance about 0.21) and the passage's change in NLL. "Best" is the highest MRR with ΔNLL ≤ 1. It passes if its MRR CI lies entirely above the unsteered baseline's CI.</p>
-      <pre class="code">    ok = [r for r in rows if r[&quot;delta_nll&quot;] &lt;= args.max_dnll]
+      <p class="cap">This uses calibration concepts and passages only. It sweeps layers at 0.5–0.9 depth and α ∈ {0.25, 0.5, 1, 2}. Each of the 16 concepts is injected over the passage only, and we measure the topic-readout MRR among the 16 (chance about 0.21) and the passage's change in NLL. "Best" is chosen on calibration passages 0–3 (highest MRR with ΔNLL ≤ 1) and then scored on passages 4–7 alone, so the pick does not inflate its own score. It passes if that held-out MRR's CI lies above both chance and the unsteered baseline's CI.</p>
+      <pre class="code">    ok = [r for r in rows if r[&quot;select_delta_nll&quot;] &lt;= args.max_dnll]
     best = None
     if ok:
-        b = max(ok, key=lambda r: r[&quot;mrr&quot;])
-        best = {k: b[k] for k in (&quot;layer&quot;, &quot;layer_frac&quot;, &quot;alpha&quot;, &quot;dose&quot;, &quot;top1&quot;, &quot;mrr&quot;, &quot;mrr_ci&quot;, &quot;delta_nll&quot;)}
-<span class="hl">        best[&quot;g1_pass&quot;] = b[&quot;mrr_ci&quot;][0] &gt; base[&quot;ci&quot;][1]</span></pre>
+        b = max(ok, key=lambda r: r[&quot;select_mrr&quot;])
+        best = {k: b[k] for k in (&quot;layer&quot;, &quot;layer_frac&quot;, &quot;alpha&quot;, &quot;dose&quot;, &quot;top1&quot;, &quot;mrr&quot;, &quot;mrr_ci&quot;, &quot;select_mrr&quot;,
+                                  &quot;heldout_mrr&quot;, &quot;heldout_ci&quot;, &quot;delta_nll&quot;)}
+        lo = b[&quot;heldout_ci&quot;][0]
+        best[&quot;above_chance&quot;] = lo &gt; chance
+        best[&quot;above_baseline&quot;] = lo &gt; base[&quot;heldout_ci&quot;][1]
+<span class="hl">        best[&quot;g1_pass&quot;] = best[&quot;above_chance&quot;] and best[&quot;above_baseline&quot;]</span></pre>
       <ul>
-        <li><b>G1 fails:</b> stop before episodes and report. Passages, concepts and dose are not retuned on episode data.</li>
+        <li><b>G1 or preflight fails:</b> report it and run the episodes anyway (Sam's call: Lindsey and Black–Bloom found positive results). Passages, concepts and dose are never retuned on episode data.</li>
+        <li><b>Preflight</b> (<code>scripts/preflight.py</code>): hook parity three ways (a pre-hook on layer L+1 sees exactly +v on the window and nothing before it; an independent hook with the introspection-mechanisms semantics gives the same logits; bf16 tests), and accumulation: MRR after 0, 1, 2, 3 steered copies of a passage and an unsteered distractor.</li>
         <li><b>G2:</b> run 2 episodes, then read both transcripts by hand before running the rest. Stop if there is degenerate or distress-like text. Concepts stay mild and neutral, per Andres.</li>
         <li><b>G3:</b> report whatever comes out, including a null.</li>
       </ul>
@@ -694,9 +748,13 @@ def run_episode(lm: SteeredLM, board: Board, passage: str, seed: int = 0) -&gt; 
     <h3>Commands (on the box, never on the Mac)</h3>
 <pre class="raw">scripts/remote.sh HOST setup
 scripts/remote.sh HOST run python3 -m pytest tests -q
+scripts/remote.sh HOST run KNOB_TEST_DTYPE=bfloat16 python3 -m pytest tests -q
 scripts/remote.sh HOST run python3 scripts/screen.py --model Qwen/Qwen3-32B --dtype bfloat16
 scripts/remote.sh HOST run python3 scripts/calibrate.py --model Qwen/Qwen3-32B --dtype bfloat16 --screen latest
+scripts/remote.sh HOST run python3 scripts/calibrate.py --model Qwen/Qwen3-32B --dtype bfloat16 --screen latest --open
+scripts/remote.sh HOST run python3 scripts/preflight.py --model Qwen/Qwen3-32B --dtype bfloat16 --screen latest --calibration latest
 scripts/remote.sh HOST run python3 scripts/r0_pilot.py --model Qwen/Qwen3-32B --dtype bfloat16 --screen latest --calibration latest --episodes 48
+scripts/remote.sh HOST watch      # every episode's chat, live, at http://localhost:8008
 scripts/remote.sh HOST pull
 python3 scripts/analyze.py runs/r0_Qwen3-32B_*.jsonl</pre>
   </div>
@@ -706,10 +764,10 @@ python3 scripts/analyze.py runs/r0_Qwen3-32B_*.jsonl</pre>
   <h2>Open checks before launch</h2>
   <p>I found these while laying the protocol out. None of them is a bug, but each is a choice you may want to change before data exists.</p>
   <div class="checks">
-    <div class="check"><span class="pill warn">propose</span><b>Balance passages across episodes</b><p>Each episode now draws its passage at random, so 48 episodes will cover the 16 passages unevenly. I would use passage e mod 16 instead, which gives exactly 3 episodes per passage. This is a one-line change in <code>r0_pilot.py</code>.</p></div>
+    <div class="check"><span class="pill done">done</span><b>Audit fixes applied</b><p>Multiple choice off (unseen readout instead); knob-specific Δ_spec primary; screen, calibration and model asserted to belong together; model revisions pinned and provenance (code revision, versions, GPU, dtype, attention) in every output; forged turns (<code>&lt;|im_start|&gt;</code> or <code>&lt;tool_response&gt;</code> written by the model) cut before the model can read them; G1 select/confirm split; sign-test tie threshold; passages balanced as e mod 16; token ids and schedule saved per episode for exact replay.</p></div>
     <div class="check"><span class="pill warn">decide</span><b>Episode count</b><p>The power analysis (R0.d, 47563857) is not done, so 48 is a budget choice, not a powered one. At 32B it is about 4–5 h of episodes.</p></div>
     <div class="check"><span class="pill open">note</span><b>G1 wrapper differs slightly from episodes</b><p>The calibration readout puts the passage in a tool response without the "Knob k turned." header, and reads it once rather than on every press. G1 only sets the dose, so I would leave this as it is.</p></div>
-    <div class="check"><span class="pill open">note</span><b>Concept names appear only at test time</b><p>The multiple choice names the 5 board concepts after the episode is over. Cached and observer see the same list, so naming adds no gap of its own.</p></div>
+    <div class="check"><span class="pill open">note</span><b>No concept names at test time</b><p>The model is never shown a concept name. The readout ranks candidates the model never sees, and the multiple choice is off unless run with <code>--choice</code>.</p></div>
     <div class="check"><span class="pill open">note</span><b>Steering persists through the cache</b><p>From the first press on, every later token attends to steered keys and values. So the observation after press 3 can carry the effects of presses 1 and 2. That is intended, and the observer controls for the text.</p></div>
     <div class="check"><span class="pill open">note</span><b>The stop rule is manual</b><p>The automated degeneration monitor (R0.c, 384c3919) is not built. For this run, the check is reading the first two transcripts by hand.</p></div>
   </div>

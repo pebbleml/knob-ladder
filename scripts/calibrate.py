@@ -11,8 +11,11 @@ through the question as well) and two numbers are averaged over all (concept, pa
   among the calibration concepts' first tokens (top-1, MRR with a 95% bootstrap CI);
 - disruption: mean increase in next-token NLL over the passage under steering.
 
-`best` is the highest-MRR (layer, alpha) with dNLL <= 1. G1 passes if its CI lower bound
-exceeds the upper bound of the unsteered baseline MRR's CI.
+Selection and confirmation use different passages, so the pick's score is not inflated by
+the pick: `best` is the (layer, alpha) with the highest MRR on the first half of
+CALIB_PASSAGES among those with dNLL <= 1, and it is then scored on the second half alone.
+G1 passes if that held-out MRR's CI lower bound exceeds both chance and the upper bound of
+the unsteered baseline's CI on the same half.
 """
 from __future__ import annotations
 
@@ -32,6 +35,8 @@ from knobladder.model import Intervention, SteeredLM  # noqa: E402
 from knobladder.readout import QUESTION, first_tokens, ranks, readout_prompt  # noqa: E402
 from knobladder.stats import bootstrap_ci, chance_mrr, mean  # noqa: E402
 from knobladder.text import CALIB_PASSAGES, PASSAGES_VERSION  # noqa: E402
+
+SELECT = 4  # passages [0, SELECT) choose (layer, alpha); the rest confirm it
 
 
 def main():
@@ -69,7 +74,9 @@ def main():
         rr = [1 / r[w] for w in words]
         base_rr += rr
         base_by_passage.append(mean(rr))
-    base = {"mrr": mean(base_rr), "ci": bootstrap_ci(base_rr), "per_passage": base_by_passage}
+    held = base_rr[SELECT * len(words):]
+    base = {"mrr": mean(base_rr), "ci": bootstrap_ci(base_rr), "per_passage": base_by_passage,
+            "heldout_mrr": mean(held), "heldout_ci": bootstrap_ci(held)}
     print(f"{len(words)} calibration concepts, {len(prompts)} passages; chance mrr {chance:.3f}")
     print(f"unsteered mrr {base['mrr']:.3f} CI [{base['ci'][0]:.3f}, {base['ci'][1]:.3f}]; per passage "
           + " ".join(f"{m:.2f}" for m in base_by_passage))
@@ -93,20 +100,29 @@ def main():
                     rr.append(1 / r)
                     dnll.append(passage_nll(logits[:-1], targets) - nll0)
                 rank_rows.append(row_ranks)
+            cut = SELECT * len(words)
             row = {"layer": layer, "layer_frac": frac, "alpha": alpha, "dose": alpha * scale,
                    "top1": mean([x == 1 for x in rr]), "mrr": mean(rr), "mrr_ci": bootstrap_ci(rr),
-                   "delta_nll": mean(dnll), "ranks": rank_rows}
+                   "select_mrr": mean(rr[:cut]), "heldout_mrr": mean(rr[cut:]), "heldout_ci": bootstrap_ci(rr[cut:]),
+                   "delta_nll": mean(dnll), "select_delta_nll": mean(dnll[:cut]), "ranks": rank_rows}
             rows.append(row)
             print(f"layer {layer:>2}/{lm.n_layers} alpha {alpha:<5} dose {row['dose']:7.1f}  top1 {row['top1']:.2f}  "
-                  f"mrr {row['mrr']:.3f} [{row['mrr_ci'][0]:.3f}, {row['mrr_ci'][1]:.3f}]  dNLL {row['delta_nll']:+.2f}")
+                  f"mrr {row['mrr']:.3f} [{row['mrr_ci'][0]:.3f}, {row['mrr_ci'][1]:.3f}]  "
+                  f"select {row['select_mrr']:.3f} held-out {row['heldout_mrr']:.3f}  dNLL {row['delta_nll']:+.2f}")
 
-    ok = [r for r in rows if r["delta_nll"] <= args.max_dnll]
+    ok = [r for r in rows if r["select_delta_nll"] <= args.max_dnll]
     best = None
     if ok:
-        b = max(ok, key=lambda r: r["mrr"])
-        best = {k: b[k] for k in ("layer", "layer_frac", "alpha", "dose", "top1", "mrr", "mrr_ci", "delta_nll")}
-        best["g1_pass"] = b["mrr_ci"][0] > base["ci"][1]
-        print(f"best: layer {b['layer']} (frac {b['layer_frac']}) alpha {b['alpha']} mrr {b['mrr']:.3f} "
+        b = max(ok, key=lambda r: r["select_mrr"])
+        best = {k: b[k] for k in ("layer", "layer_frac", "alpha", "dose", "top1", "mrr", "mrr_ci", "select_mrr",
+                                  "heldout_mrr", "heldout_ci", "delta_nll")}
+        lo = b["heldout_ci"][0]
+        best["above_chance"] = lo > chance
+        best["above_baseline"] = lo > base["heldout_ci"][1]
+        best["g1_pass"] = best["above_chance"] and best["above_baseline"]
+        print(f"best (chosen on passages 0-{SELECT - 1}): layer {b['layer']} (frac {b['layer_frac']}) alpha {b['alpha']}; "
+              f"held-out mrr {b['heldout_mrr']:.3f} [{lo:.3f}, {b['heldout_ci'][1]:.3f}] vs chance {chance:.3f}, "
+              f"baseline {base['heldout_mrr']:.3f} [{base['heldout_ci'][0]:.3f}, {base['heldout_ci'][1]:.3f}]; "
               f"dNLL {b['delta_nll']:+.2f}; G1 {'PASS' if best['g1_pass'] else 'FAIL'}")
     else:
         print(f"best: none with dNLL <= {args.max_dnll}; G1 FAIL")
@@ -116,6 +132,7 @@ def main():
     out.parent.mkdir(exist_ok=True)
     out.write_text(json.dumps({
         "model": args.model, "mode": mode, "screen": screen["path"], "passages_version": PASSAGES_VERSION,
+        "provenance": lm.provenance(), "select_passages": SELECT,
         "question": QUESTION, "concepts": words, "chance_mrr": chance, "clean_nll": clean_nll,
         "baseline": base, "max_dnll": args.max_dnll, "rows": rows, "best": best,
     }, indent=1))
