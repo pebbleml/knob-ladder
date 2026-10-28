@@ -10,7 +10,7 @@ pass instead of replaying a conversation.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Sequence
+from typing import Dict, List, Optional, Sequence, Tuple
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer, DynamicCache
@@ -23,11 +23,11 @@ class Intervention:
     start: int  # first absolute position steered
     end: Optional[int] = None  # exclusive; None keeps steering open-ended
 
-    def mask(self, pos: torch.Tensor) -> torch.Tensor:
-        m = pos >= self.start
-        if self.end is not None:
-            m &= pos < self.end
-        return m
+    def span(self, offset: int, length: int) -> Optional[slice]:
+        """Steered slice of a chunk covering absolute positions [offset, offset + length), or None."""
+        lo = max(self.start, offset)
+        hi = offset + length if self.end is None else min(self.end, offset + length)
+        return slice(lo - offset, hi - offset) if lo < hi else None
 
 
 def default_device() -> str:
@@ -48,7 +48,7 @@ class SteeredLM:
         self.layers = self.model.model.layers
         self.n_layers = len(self.layers)
         self.d_model = self.model.config.hidden_size
-        self._schedule: List[Intervention] = []
+        self._schedule: Dict[int, List[Tuple[Intervention, torch.Tensor]]] = {}
         self._offset = 0
         self._capture_layers: set = set()
         self._captured: Dict[int, List[torch.Tensor]] = {}
@@ -59,14 +59,11 @@ class SteeredLM:
     def _hook(self, i: int):
         def hook(module, inputs, output):
             h = output[0] if isinstance(output, tuple) else output
-            if self._schedule:
-                pos = torch.arange(self._offset, self._offset + h.shape[1], device=h.device)
-                for iv in self._schedule:
-                    if iv.layer != i:
-                        continue
-                    m = iv.mask(pos)
-                    if m.any():
-                        h[:, m] += iv.vector.to(device=h.device, dtype=h.dtype)
+            # Spans are computed from Python ints, so steering never forces a device sync.
+            for iv, v in self._schedule.get(i, ()):
+                sl = iv.span(self._offset, h.shape[1])
+                if sl is not None:
+                    h[:, sl] += v
             if i in self._capture_layers:
                 self._captured.setdefault(i, []).append(h[0].detach().float().cpu())
             return output
@@ -78,6 +75,14 @@ class SteeredLM:
         x = torch.tensor([list(ids)], device=self.device)
         out = self.model.model(input_ids=x, past_key_values=cache, use_cache=cache is not None)
         return out.last_hidden_state[0]
+
+    def _set_schedule(self, schedule: Sequence[Intervention]):
+        """Group by layer and move each vector to the device once, not once per forward."""
+        dtype = self.model.dtype
+        self._schedule = {}
+        for iv in schedule:
+            v = iv.vector.to(device=self.device, dtype=dtype)
+            self._schedule.setdefault(iv.layer, []).append((iv, v))
 
     # -- public API --------------------------------------------------------
     def encode(self, text: str) -> List[int]:
@@ -103,7 +108,7 @@ class SteeredLM:
 
         Logits are for the last position, or (len(positions), vocab) when positions are given.
         """
-        self._schedule = list(schedule)
+        self._set_schedule(schedule)
         self._capture_layers = set(capture_layers)
         self._captured = {}
         try:
@@ -111,7 +116,7 @@ class SteeredLM:
             logits = self.model.lm_head(h[-1] if positions is None else h[list(positions)]).float().cpu()
             caps = {k: torch.cat(v) for k, v in self._captured.items()}
         finally:
-            self._schedule, self._capture_layers, self._captured = [], set(), {}
+            self._schedule, self._capture_layers, self._captured = {}, set(), {}
         return logits, caps
 
     @torch.no_grad()
@@ -126,17 +131,20 @@ class SteeredLM:
         top_k: int = 20,
         seed: int = 0,
     ) -> List[int]:
-        """Sample a continuation. Interventions at future positions apply as tokens are generated."""
+        """Sample a continuation. Interventions at future positions apply as tokens are generated.
+
+        Top-k runs on the device, so each step moves only k logits to the host.
+        """
         gen = torch.Generator().manual_seed(seed)
         stops = set(stop_ids) | {self.tok.eos_token_id}
-        self._schedule = list(schedule)
+        self._set_schedule(schedule)
         cache = DynamicCache()
         new: List[int] = []
         try:
             h = self._forward(ids, 0, cache)
             pos = len(ids)
             for _ in range(max_new_tokens):
-                logits = self.model.lm_head(h[-1]).float().cpu()
+                logits = self.model.lm_head(h[-1]).float()
                 t = sample(logits, temperature, top_p, top_k, gen)
                 new.append(t)
                 if t in stops:
@@ -144,20 +152,21 @@ class SteeredLM:
                 h = self._forward([t], pos, cache)
                 pos += 1
         finally:
-            self._schedule = []
+            self._schedule = {}
         return new
 
 
 def sample(logits: torch.Tensor, temperature: float, top_p: float, top_k: int, gen) -> int:
+    """Temperature, top-k, then top-p sampling. `logits` may live on any device; `gen` is a CPU generator."""
     if temperature <= 0:
         return int(logits.argmax())
-    logits = logits / temperature
     if top_k:
-        kth = torch.topk(logits, top_k).values[-1]
-        logits = logits.masked_fill(logits < kth, float("-inf"))
-    probs = torch.softmax(logits, -1)
+        vals, idx = torch.topk(logits, top_k)  # sorted, on the device
+        vals, idx = vals.cpu(), idx.cpu()
+    else:
+        vals, idx = torch.sort(logits.cpu(), descending=True)
+    probs = torch.softmax(vals / temperature, -1)
     if top_p < 1:
-        sp, si = torch.sort(probs, descending=True)
-        keep = sp.cumsum(-1) - sp < top_p
-        probs = torch.zeros_like(probs).scatter(0, si[keep], sp[keep])
-    return int(torch.multinomial(probs / probs.sum(), 1, generator=gen))
+        keep = probs.cumsum(-1) - probs < top_p
+        probs = probs * keep
+    return int(idx[torch.multinomial(probs / probs.sum(), 1, generator=gen)])
