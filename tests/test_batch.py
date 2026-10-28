@@ -12,7 +12,7 @@ from transformers import DynamicCache
 
 from knobladder import episode
 from knobladder.episode import (
-    OBSERVE, READOUT, TURNED, Transcript, append_passage, discovery, run_episode, run_episodes,
+    MAX_NEW_TOKENS, OBSERVE, READOUT, TURNED, Transcript, append_passage, discovery, run_episode, run_episodes,
     shuffled_board, system_text,
 )
 from knobladder.knobs import CONCEPTS, random_direction
@@ -130,6 +130,7 @@ class FakeLM:
 
     def __init__(self):
         self.tok = SimpleNamespace(decode=self.decode, eos_token_id=BASE + 1)
+        self.model = SimpleNamespace(config=SimpleNamespace(max_position_embeddings=10 ** 9))
         self.sizes = []
 
     def encode(self, text):
@@ -199,6 +200,20 @@ def test_run_episodes_equals_each_episode_run_alone(reuse_cache, window):
                 assert tr.ids[iv.end] in (fake.token_id("<|im_end|>"), fake.token_id("</tool_call>"))
     assert {e["kind"] for tr in together for e in tr.events} >= {"press", "forged", "no_call", "end_session"}
 
+
+
+def test_episode_ends_before_the_context_is_full():
+    boards, passage = fake_boards(3), EPISODE_PASSAGES[0]
+    fake = FakeLM()
+    limit = 2500  # tokens of transcript after which no new turn starts
+    fake.model.config.max_position_embeddings = limit + 3 * MAX_NEW_TOKENS + len(fake.encode(passage)) + 256
+    trs = run_episodes(fake, boards, [passage] * 3, [0, 1, 2])
+    kinds = [[e["kind"] for e in tr.events] for tr in trs]
+    assert any(k[-2:] == ["context_full", "explanation"] for k in kinds)
+    for tr in trs:
+        full = [e for e in tr.events if e["kind"] == "context_full"]
+        assert all(e["tokens"] > limit for e in full)
+        assert all(e["window"][0] <= limit + 400 for e in tr.events if e["kind"] == "press")
 
 # -- with a model ----------------------------------------------------------
 @pytest.fixture(scope="module")
@@ -365,7 +380,7 @@ def test_batched_discovery_equals_solo_discovery(lm):
     tr = Transcript()
     tr.append(lm, system(system_text(board.numbers()), episode.TOOLS) + user("Begin.") + GEN)
     tr.append(lm, '<tool_call>\n{"name": "turn", "arguments": {"knob": %d}}\n</tool_call><|im_end|>\n' % knob)
-    window = append_passage(lm, tr, TURNED.format(k=knob), lm.encode(EPISODE_PASSAGES[0]))
+    window = append_passage(lm, tr, TURNED.format(k=knob, level=10), lm.encode(EPISODE_PASSAGES[0]))
     tr.schedule.append(Intervention(board.layer, board.vector(knob), *window))
     tr.append(lm, user(OBSERVE) + GEN + "It read the same as before.<|im_end|>\n")
     firsts = first_tokens(lm, board.concepts())

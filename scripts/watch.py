@@ -219,6 +219,7 @@ pre{margin:0;white-space:pre-wrap;word-break:break-word;font:inherit}
 .tool{background:var(--tool)} .steered{background:var(--steer);border:2px solid var(--steerb)}
 .ok{color:var(--ok)} .run{color:var(--run)}
 .board td{text-align:center}
+.think{border-left:3px solid var(--line);padding:2px 8px;margin:4px 0 6px;opacity:.85}
 .grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(420px,1fr));gap:10px;margin-top:8px}
 .card{border:1px solid var(--line);border-radius:4px;padding:6px 8px;min-width:0}
 .card>.hd{font-weight:bold;margin-bottom:2px} .card .msg pre{max-height:14em;overflow:auto}
@@ -349,7 +350,14 @@ def render_msg(e, t0):
                f" = <b>{esc(label_of(e))}</b>{lv}")
     if t0 is not None and isinstance(e.get("t"), (int, float)):
         hd += f" <span class=dim>+{e['t'] - t0:.1f}s</span>"
-    return f"<div class='msg {cls}'><div class=hd>{hd}</div><pre>{esc(e.get('text', ''))}</pre></div>"
+    text = str(e.get("text", ""))
+    body = f"<pre>{esc(text)}</pre>"
+    if text.startswith("<think>"):  # thinking mode: the reasoning in its own box, then the reply
+        think, done, reply = text[len("<think>"):].partition("</think>")
+        n = len(think.split())
+        body = (f"<div class=think><div class=dim>thinking &middot; {n} words{'' if done else ' (cut off)'}</div>"
+                f"<pre>{esc(think.strip())}</pre></div><pre>{esc(reply.strip())}</pre>")
+    return f"<div class='msg {cls}'><div class=hd>{hd}</div>{body}</div>"
 
 
 def render_discovery(e):

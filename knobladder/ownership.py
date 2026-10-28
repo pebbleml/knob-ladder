@@ -80,9 +80,9 @@ def ownership_trials(
         return [Intervention(board.layer, vec, s, s + window_tokens)]
 
     v_k, v_j = board.vector(k, sign), board.vector(j, sign)
-    t_self, w_self = build(self_prefix, TURNED.format(k=k))
+    t_self, w_self = build(self_prefix, TURNED.format(k=k, level=10))
     ann_prefix = tr.ids + lm.encode(user(ANNOUNCED.format(k=k)))
-    t_ann, w_ann = build(ann_prefix, TURNED.format(k=k))
+    t_ann, w_ann = build(ann_prefix, TURNED.format(k=k, level=10))
     un_prefix = tr.ids + lm.encode(user(UNANNOUNCED))
     t_un, w_un = build(un_prefix, "A knob was turned.")
 

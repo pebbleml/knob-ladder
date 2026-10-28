@@ -36,17 +36,21 @@ TOP_K = 20
 MAX_NEW_TOKENS = 256  # per generation
 MAX_TURNS = 40  # decision turns per episode
 RECALL_TOKENS = 60  # the discovery answer, greedy
-HYPERPARAMS = {
-    "temperature": TEMPERATURE, "top_p": TOP_P, "top_k": TOP_K, "thinking": False,
-    "max_new_tokens": MAX_NEW_TOKENS, "max_turns": MAX_TURNS,
-    "recall_tokens": RECALL_TOKENS, "recall_temperature": 0.0,
-}
 # With --thinking: Qwen3's thinking-mode defaults, and room for the think block. Discovery stays non-thinking.
-THINKING = {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "thinking": True, "max_new_tokens": 1024}
+THINKING = {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "thinking": True, "max_new_tokens": 4096}
 
 
 def hyperparams(thinking: bool = False) -> Dict:
-    return {**HYPERPARAMS, **THINKING} if thinking else dict(HYPERPARAMS)
+    """Read at call time, so tests can patch the module constants."""
+    hp = {
+        "temperature": TEMPERATURE, "top_p": TOP_P, "top_k": TOP_K, "thinking": False,
+        "max_new_tokens": MAX_NEW_TOKENS, "max_turns": MAX_TURNS,
+        "recall_tokens": RECALL_TOKENS, "recall_temperature": 0.0,
+    }
+    return {**hp, **THINKING} if thinking else hp
+
+
+HYPERPARAMS = hyperparams()
 
 TOOLS = [
     {
@@ -322,7 +326,13 @@ def _episode(lm: SteeredLM, board: Board, passage: str, seed: int, emit: Optiona
     gen = GEN_THINK if thinking else GEN
     passage_ids = lm.encode(passage)  # identical tokens on every press
     prompt, calls = START, 0
+    # Room left for one more press (decision, passage, observation) and the final answer, or the session ends.
+    budget = hyperparams(thinking)["max_new_tokens"]
+    limit = lm.model.config.max_position_embeddings - 3 * budget - len(passage_ids) - 256
     for turn in range(MAX_TURNS):
+        if len(tr.ids) > limit:
+            tr.events.append({"turn": turn, "kind": "context_full", "tokens": len(tr.ids)})
+            break
         tr.append(lm, user(prompt) + gen)
         emit("user", prompt)
         text, called, forged = _close(lm, tr, (yield tr, seed * 1000 + calls), stops)

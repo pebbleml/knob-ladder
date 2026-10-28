@@ -92,7 +92,7 @@ def test_window_is_exactly_the_passage(lm):
     tr = Transcript()
     tr.append(lm, user("Begin.") + GEN)
     ids = lm.encode(EPISODE_PASSAGES[0])
-    window = append_passage(lm, tr, TURNED.format(k=3), ids)
+    window = append_passage(lm, tr, TURNED.format(k=3, level=10), ids)
     assert tr.ids[window[0]:window[1]] == ids
     assert lm.tok.decode(tr.ids[window[0]:window[1]]) == EPISODE_PASSAGES[0]
 
@@ -104,7 +104,7 @@ def test_empty_schedule_leaves_cached_equal_to_observer(lm):
     tr = Transcript()
     tr.append(lm, system(system_text(board.numbers()), episode.TOOLS) + user("Begin.") + GEN)
     tr.append(lm, '<tool_call>\n{"name": "turn", "arguments": {"knob": %d}}\n</tool_call><|im_end|>\n' % sham)
-    window = append_passage(lm, tr, TURNED.format(k=sham), lm.encode(EPISODE_PASSAGES[0]))
+    window = append_passage(lm, tr, TURNED.format(k=sham, level=10), lm.encode(EPISODE_PASSAGES[0]))
     tr.append(lm, user(episode.OBSERVE) + GEN + "It read the same as before.<|im_end|>\n")
     for schedule in ([], [Intervention(board.layer, board.vector(sham), *window)]):
         tr.schedule = schedule
@@ -122,7 +122,8 @@ def test_short_episode_runs_and_steers_only_passages(lm, monkeypatch):
     board = board_for(lm, 1)
     passage = EPISODE_PASSAGES[1]
     tr = run_episode(lm, board, passage, seed=1)
-    assert 1 <= len(tr.events) <= 3
+    assert tr.events[-1]["kind"] == "explanation"  # always asked, however the turns ended
+    assert 1 <= len(tr.events) - 1 <= 3
     assert len(tr.schedule) == sum(e["kind"] == "press" for e in tr.events)
     for iv in tr.schedule:
         assert lm.tok.decode(tr.ids[iv.start:iv.end]) == passage
