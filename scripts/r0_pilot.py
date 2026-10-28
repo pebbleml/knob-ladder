@@ -45,6 +45,7 @@ def main():
     ap.add_argument("--knobs", type=int, default=5, help="concept knobs per episode (plus random and sham)")
     ap.add_argument("--episodes", type=int, default=2)
     ap.add_argument("--seed", type=int, default=0)
+    ap.add_argument("--shard", default="0/1", help="i/n: run episodes e with e %% n == i (scripts/shards.sh)")
     ap.add_argument("--choice", action="store_true", help="also score the multiple choice (names the concepts)")
     ap.add_argument("--ownership", action="store_true", help="also run ownership trials (trains the probe)")
     ap.add_argument("--probe-layer", type=float, default=0.75)
@@ -92,15 +93,18 @@ def main():
         probe = train_probe(lm, {w: vectors[w] for w in screen["calibration"]}, layer, probe_layer, dose, seed=args.seed)
         print(f"probe L{probe_layer} holdout acc {probe.holdout_accuracy:.2f}")
 
+    shard, shards = map(int, args.shard.split("/"))
     run_id = f"r0_{args.model.split('/')[-1]}_{time.strftime('%Y%m%d-%H%M%S')}"
+    if shards > 1:
+        run_id += f"_s{shard}of{shards}"
     out_path = ROOT / "runs" / f"{run_id}.jsonl"
     live = ROOT / "runs" / "live" / run_id
     live.mkdir(parents=True, exist_ok=True)
     (live / "meta.json").write_text(json.dumps({
         "run": run_id, "model": args.model, "layer": layer, "alpha": args.alpha, "dose": dose,
-        "episodes": args.episodes, "started": time.time()}))
+        "episodes": args.episodes, "shard": args.shard, "started": time.time()}))
     with out_path.open("w") as f:
-        for ep in range(args.episodes):
+        for ep in range(shard, args.episodes, shards):  # an episode's seed depends only on ep
             seed = args.seed * 100 + ep
             rng = random.Random(seed)
             passage_index = (args.seed + ep) % len(EPISODE_PASSAGES)  # balanced over passages

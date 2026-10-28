@@ -52,11 +52,20 @@ class SteeredLM:
     def __init__(self, name: str, device: Optional[str] = None, dtype=torch.float32, revision: Optional[str] = None):
         self.name = name
         self.revision = revision or REVISIONS.get(name)
-        self.device = device or default_device()
         self.tok = AutoTokenizer.from_pretrained(name, revision=self.revision)
-        self.model = AutoModelForCausalLM.from_pretrained(name, dtype=dtype, revision=self.revision)
-        self.model.to(self.device).eval()
+        if device is None and torch.cuda.device_count() > 1:
+            # Too big for one card: split the layers over every visible GPU (run one process
+            # per GPU group, e.g. CUDA_VISIBLE_DEVICES=0,1, to run several copies side by side).
+            self.model = AutoModelForCausalLM.from_pretrained(name, dtype=dtype, revision=self.revision,
+                                                              device_map="auto")
+            self.device = str(self.model.get_input_embeddings().weight.device)
+        else:
+            self.device = device or default_device()
+            self.model = AutoModelForCausalLM.from_pretrained(name, dtype=dtype, revision=self.revision)
+            self.model.to(self.device)
+        self.model.eval()
         self.layers = self.model.model.layers
+        self._layer_device = [next(layer.parameters()).device for layer in self.layers]
         self.n_layers = len(self.layers)
         self.d_model = self.model.config.hidden_size
         self._schedule: Dict[int, List[Tuple[Intervention, torch.Tensor]]] = {}
@@ -72,7 +81,8 @@ class SteeredLM:
         return {
             "model": self.name, "revision": self.revision, "dtype": str(self.model.dtype),
             "attn_implementation": getattr(self.model.config, "_attn_implementation", None),
-            "device": torch.cuda.get_device_name() if self.device == "cuda" else self.device,
+            "device": [torch.cuda.get_device_name(i) for i in range(torch.cuda.device_count())]
+            if torch.cuda.is_available() else self.device,
             "torch": torch.__version__, "transformers": transformers.__version__,
             "code": rev.read_text().strip() if rev.exists() else None,
         }
@@ -99,11 +109,11 @@ class SteeredLM:
         return out.last_hidden_state[0]
 
     def _set_schedule(self, schedule: Sequence[Intervention]):
-        """Group by layer and move each vector to the device once, not once per forward."""
+        """Group by layer and move each vector to its layer's device once, not once per forward."""
         dtype = self.model.dtype
         self._schedule = {}
         for iv in schedule:
-            v = iv.vector.to(device=self.device, dtype=dtype)
+            v = iv.vector.to(device=self._layer_device[iv.layer], dtype=dtype)
             self._schedule.setdefault(iv.layer, []).append((iv, v))
 
     # -- public API --------------------------------------------------------

@@ -7,9 +7,10 @@ stops before the model writes, so the transcript carries no information about th
 The `observer` re-runs the same tokens with no steering: whatever the cached model knows
 about a knob beyond the observer has to come from its own steered states.
 
-Discovery never shows the model a list of concepts. It asks what each knob does, as free
-recall and as a one-word answer whose first-token logits we rank over the knob concepts
-the model is never shown. The multiple choice is kept only for a later, opt-in analysis.
+Discovery never shows the model a list of concepts. It asks what each knob does, to be
+answered with one word and then one sentence: the first-token logits of the word are ranked
+over the knob concepts (which the model never sees), and the greedy answer is kept as text.
+The multiple choice is kept only for a later, opt-in analysis.
 """
 from __future__ import annotations
 
@@ -32,7 +33,7 @@ TOP_P = 0.8
 TOP_K = 20
 MAX_NEW_TOKENS = 256  # per generation
 MAX_TURNS = 24  # decision turns per episode
-RECALL_TOKENS = 60  # free recall, greedy
+RECALL_TOKENS = 60  # the discovery answer, greedy
 HYPERPARAMS = {
     "temperature": TEMPERATURE, "top_p": TOP_P, "top_k": TOP_K, "thinking": False,
     "max_new_tokens": MAX_NEW_TOKENS, "max_turns": MAX_TURNS,
@@ -71,8 +72,7 @@ START = "Begin."
 OBSERVE = "Write one or two sentences about what you observed."
 CONTINUE = "Turn a knob, or call end_session when you are done."
 NUDGE = "Use the turn tool, or call end_session when you are done."
-RECALL = "What does knob {k} do? Answer in one sentence."
-READOUT = "What does knob {k} do? Answer with one word."
+READOUT = "What does knob {k} do? Answer with one word, then one sentence."
 CHOICE = "Which option best describes what knob {k} does? {listing} Reply with the letter only."
 TURNED = "Knob {k} turned."
 NOTHING = "nothing changed"
@@ -92,7 +92,7 @@ def fixed_texts(n: int = 7) -> List[str]:
     """Every fixed string the model sees in an episode (the passage aside), for the lexical screen."""
     pre, post = tool_response(TURNED)
     return [system_text(list(range(1, n + 1))), json.dumps(TOOLS), START, OBSERVE, CONTINUE, NUDGE,
-            RECALL, READOUT, CHOICE, NOTHING, pre, post]
+            READOUT, CHOICE, NOTHING, pre, post]
 
 
 def tool_response(header: str) -> Tuple[str, str]:
@@ -294,9 +294,10 @@ def discovery(
 ) -> List[Dict]:
     """For every knob, branches off the final transcript, each under cached and observer:
 
-    - recall: greedy one-sentence answer, and which board concepts (or associates) it names;
-    - readout: one-word answer; every candidate in `firsts` (the knob concepts, never shown
-      to the model) ranked by its first-token logit;
+    - readout: READOUT's answer position; every candidate in `firsts` (the knob concepts,
+      never shown to the model) ranked by its first-token logit;
+    - recall: the greedy answer itself (the word, then the sentence), and which board
+      concepts (or their associates) it names;
     - choice (only with `rng`): a multiple choice over the board's concepts + NOTHING. It shows
       the model the concepts, so it is off unless asked for.
     """
@@ -308,22 +309,17 @@ def discovery(
         label = board.knobs[number].label
         row = {"knob": number, "label": label, "presses": presses.get(number, 0)}
 
-        ids = tr.ids + lm.encode(user(RECALL.format(k=number)) + GEN)
-        row["recall"] = {
-            cond: lm.tok.decode(lm.generate(ids, sched, RECALL_TOKENS, stop, temperature=0),
-                                skip_special_tokens=True).strip()
-            for cond, sched in conds
-        }
+        ids = tr.ids + lm.encode(user(READOUT.format(k=number)) + GEN)
+        row["readout"], row["recall"] = {}, {}
+        for cond, sched in conds:
+            logits, _ = lm.score(ids, sched)  # the same logits as the answer's first greedy step
+            r = ranks(logits, firsts)
+            row["readout"][cond] = {"ranks": r, "top": sorted(r, key=r.get)[:5]}
+            row["recall"][cond] = lm.tok.decode(lm.generate(ids, sched, RECALL_TOKENS, stop, temperature=0),
+                                                skip_special_tokens=True).strip()
         row["recall_hits"] = {
             cond: [c for c in board.concepts() if lexical_hits(text, c)] for cond, text in row["recall"].items()
         }
-
-        ids = tr.ids + lm.encode(user(READOUT.format(k=number)) + GEN)
-        row["readout"] = {}
-        for cond, sched in conds:
-            logits, _ = lm.score(ids, sched)
-            r = ranks(logits, firsts)
-            row["readout"][cond] = {"ranks": r, "top": sorted(r, key=r.get)[:5]}
         if rng is None:
             rows.append(row)
             continue

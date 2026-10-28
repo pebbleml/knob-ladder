@@ -2,8 +2,9 @@
 
     python3 scripts/analyze.py runs/r0_Qwen3-32B_*.jsonl
 
-Pure Python, runs locally on pulled jsonl. Scores come from the one-word readout ("What does
-knob k do?"), whose first-token logits rank the 32 knob concepts the model is never shown;
+Pure Python, runs locally on pulled jsonl. Scores come from the readout ("What does knob k
+do? Answer with one word, then one sentence."): the first-token logits of the answer rank
+the 32 knob concepts the model is never shown;
 rr = 1/rank, and Δ(c|j) = rr_cached(c|j) - rr_observer(c|j) for concept c asked about knob j.
 
 Injected concepts can be primed in general, raising c whichever knob is asked about. The
@@ -14,7 +15,7 @@ primary metric removes that: for a pressed concept knob k carrying c,
 averaged per episode over pressed concept knobs, with a bootstrap CI over episodes and sign
 and sign-flip tests. Also reported: the raw Δ(c|k); top-1 accuracy cached vs observer against
 chance; how well the observer alone does (the transcript's own leakage); concept words in the
-observations; free-recall hits; the multiple choice only if the run scored it (--choice).
+observations; how often the answer text names the concept; the multiple choice only if the run scored it (--choice).
 """
 from __future__ import annotations
 
@@ -88,7 +89,7 @@ def report(rows, min_presses):
         print(f"{cond:>8}: top-1 {top1:.3f}, MRR {fmt_ci(mrr)} over {len(knobs)} knobs "
               f"(chance top-1 {1 / n_cand:.3f}, MRR {chance_mrr(n_cand):.3f})")
     hits = {c: mean([d["label"] in d["recall_hits"][c] for d in knobs]) for c in ("cached", "observer")}
-    print(f"free recall names the knob's concept: cached {hits['cached']:.3f}, observer {hits['observer']:.3f}")
+    print(f"answer text names the knob's concept: cached {hits['cached']:.3f}, observer {hits['observer']:.3f}")
     if "choice" in knobs[0]:
         mc = [d["choice"]["cached"]["p_correct"] - d["choice"]["observer"]["p_correct"] for d in knobs]
         print(f"multiple choice (shows the concepts) cached - observer p(correct): {fmt_ci(mc)}")
@@ -142,8 +143,8 @@ def main():
         for e in r["events"]:
             if e["kind"] == "press" and e["knob"] == d["knob"]:
                 print(f"  observed (turn {e['turn']}): {e['observation']!r}")
-        print(f"  recall cached:   {d['recall']['cached']!r}")
-        print(f"  recall observer: {d['recall']['observer']!r}")
+        print(f"  answer cached:   {d['recall']['cached']!r}")
+        print(f"  answer observer: {d['recall']['observer']!r}")
 
 
 if __name__ == "__main__":
