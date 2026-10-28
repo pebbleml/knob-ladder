@@ -3,11 +3,12 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Familjen+Grotesk:wght@500;700&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
 <style>
-/* Layout: a single lab-board column; the ladder as a row of rungs, then the WIRK map, R0 evidence, and the open decision. */
+/* Layout: one lab-protocol column. Status and launch check first, then the experiment from harness to analysis, every prompt and code path verbatim. */
 :root {
   --bg: #f3f5f8; --panel: #ffffff; --ink: #18202b; --muted: #5b6676; --line: #d9dee6;
   --signal: #2456d6; --signal-soft: #e3eafb; --amber: #b86a00; --amber-soft: #fbefdc;
-  --good: #1f7a4d; --good-soft: #e0f2e8; --idle: #8a94a3;
+  --good: #1f7a4d; --good-soft: #e0f2e8; --idle: #8a94a3; --bad: #b3261e; --bad-soft: #fbe4e2;
+  --code-bg: #f7f8fb;
   --display: "Familjen Grotesk", "Helvetica Neue", Arial, sans-serif;
   --body: "IBM Plex Sans", "Helvetica Neue", Arial, sans-serif;
   --mono: "IBM Plex Mono", ui-monospace, Menlo, monospace;
@@ -15,26 +16,36 @@
 @media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
   --bg: #11151b; --panel: #181e26; --ink: #e5e9ef; --muted: #98a3b3; --line: #2b3440;
   --signal: #7da2ff; --signal-soft: #1d2a47; --amber: #f0a64a; --amber-soft: #3a2b16;
-  --good: #5cc98f; --good-soft: #17352a; --idle: #6c7685; color-scheme: dark } }
+  --good: #5cc98f; --good-soft: #17352a; --idle: #6c7685; --bad: #ff8a80; --bad-soft: #3d1c1a;
+  --code-bg: #141920; color-scheme: dark } }
 :root[data-theme="dark"] {
   --bg: #11151b; --panel: #181e26; --ink: #e5e9ef; --muted: #98a3b3; --line: #2b3440;
   --signal: #7da2ff; --signal-soft: #1d2a47; --amber: #f0a64a; --amber-soft: #3a2b16;
-  --good: #5cc98f; --good-soft: #17352a; --idle: #6c7685; color-scheme: dark }
+  --good: #5cc98f; --good-soft: #17352a; --idle: #6c7685; --bad: #ff8a80; --bad-soft: #3d1c1a;
+  --code-bg: #141920; color-scheme: dark }
 body { background: var(--bg); color: var(--ink); font: 15px/1.55 var(--body); }
 .wrap { max-width: 1080px; margin: 0 auto; padding-block: 40px 64px;
   padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px));
-  display: grid; gap: 44px; }
+  display: grid; gap: 52px; }
 h1, h2, h3 { font-family: var(--display); text-wrap: balance; margin: 0; line-height: 1.15; }
 h1 { font-size: clamp(30px, 5vw, 44px); font-weight: 700; letter-spacing: -0.01em; }
-h2 { font-size: 22px; font-weight: 700; }
+h2 { font-size: 24px; font-weight: 700; }
 h3 { font-size: 16px; font-weight: 700; }
-p { margin: 0; max-width: 68ch; }
+p { margin: 0; max-width: 72ch; }
+ul, ol { margin: 0; padding-left: 20px; display: grid; gap: 4px; max-width: 76ch; }
+a { color: var(--signal); }
 .eyebrow { font: 500 11px/1 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
 .mono, code { font-family: var(--mono); font-size: 0.88em; }
-section { display: grid; gap: 16px; min-width: 0; }
-.lede { font-size: 17px; color: var(--ink); }
+.muted { color: var(--muted); }
+section { display: grid; gap: 16px; min-width: 0; scroll-margin-top: 16px; }
+.sub { display: grid; gap: 10px; min-width: 0; }
+.lede { font-size: 17px; }
+.cap { font-size: 13.5px; color: var(--muted); }
 .meta { display: flex; flex-wrap: wrap; gap: 8px 18px; color: var(--muted); font-size: 13px; }
 .meta b { color: var(--ink); font-weight: 600; }
+nav { display: flex; flex-wrap: wrap; gap: 6px; }
+nav a { font: 500 12px/1 var(--mono); padding: 7px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel); color: var(--ink); text-decoration: none; }
+nav a:hover, nav a:focus-visible { border-color: var(--signal); color: var(--signal); outline: none; }
 
 .pill { display: inline-flex; align-items: center; gap: 6px; font: 500 11px/1 var(--mono); letter-spacing: 0.04em;
   padding: 5px 8px; border-radius: 999px; text-transform: uppercase; white-space: nowrap; }
@@ -43,297 +54,681 @@ section { display: grid; gap: 16px; min-width: 0; }
 .pill.open { color: var(--idle); background: color-mix(in srgb, var(--idle) 14%, transparent); }
 .pill.done { color: var(--good); background: var(--good-soft); }
 .pill.warn { color: var(--amber); background: var(--amber-soft); }
+.pill.bad { color: var(--bad); background: var(--bad-soft); }
+
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 18px; display: grid; gap: 12px; min-width: 0; }
+.panel.alert { border-color: var(--amber); }
+.grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+
+pre { margin: 0; overflow-x: auto; border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px;
+  font: 12.5px/1.6 var(--mono); background: var(--code-bg); color: var(--ink); tab-size: 4; }
+pre.raw { white-space: pre-wrap; word-break: break-word; }
+pre .hl { background: var(--amber-soft); color: var(--ink); display: inline-block; min-width: 100%; }
+pre .steer { background: var(--signal-soft); color: var(--signal); outline: 1px dashed var(--signal); border-radius: 2px; }
+pre .gen { color: var(--good); font-style: italic; }
+.key { display: flex; flex-wrap: wrap; gap: 6px 16px; font: 12px var(--mono); color: var(--muted); }
+.key i { display: inline-block; width: 12px; height: 12px; border-radius: 2px; vertical-align: -2px; margin-right: 6px; }
+
+table { border-collapse: collapse; width: 100%; font-size: 13.5px; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+th { font: 500 11px var(--mono); letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
+tr:last-child td { border-bottom: 0; }
+.tablewrap { overflow-x: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
+.tablewrap.tall { max-height: 520px; overflow-y: auto; }
+.tablewrap.tall th { position: sticky; top: 0; background: var(--panel); }
+code.q { white-space: pre-wrap; word-break: break-word; color: var(--ink); }
 
 /* Ladder */
-.ladder { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 0; border: 1px solid var(--line); background: var(--panel); border-radius: 10px; overflow: hidden; }
-.rung { padding: 18px; display: grid; gap: 10px; align-content: start; border-left: 1px solid var(--line); min-width: 0; }
+.ladder { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); border: 1px solid var(--line); background: var(--panel); border-radius: 10px; overflow: hidden; }
+.rung { padding: 14px 16px; display: grid; gap: 6px; align-content: start; border-left: 1px solid var(--line); min-width: 0; }
 .rung:first-child { border-left: 0; background: color-mix(in srgb, var(--signal-soft) 55%, var(--panel)); }
-.rung .tag { font: 700 28px/1 var(--display); color: var(--signal); }
+.rung .tag { font: 700 22px/1 var(--display); color: var(--signal); }
 .rung:not(:first-child) .tag { color: var(--idle); }
-.rung p { font-size: 13.5px; color: var(--muted); }
-.rung .id { font: 12px var(--mono); color: var(--muted); }
-.qs { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
-.q { border-top: 2px solid var(--ink); padding-top: 10px; display: grid; gap: 4px; min-width: 0; }
-.q span { font-size: 13.5px; color: var(--muted); }
+.rung p { font-size: 13px; color: var(--muted); }
+.rung .top { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 
-/* WIRK map */
-.map { display: grid; gap: 14px; }
-.tier { display: grid; gap: 10px; }
-.tier-label { font: 500 11px/1 var(--mono); letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+/* Episode flow */
+.flow { display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 0; border: 1px solid var(--line); border-radius: 10px; overflow: hidden; background: var(--panel); }
+.step { padding: 14px; border-left: 1px solid var(--line); display: grid; gap: 6px; align-content: start; min-width: 0; }
+.step:first-child { border-left: 0; }
+.step .n { font: 500 11px var(--mono); color: var(--muted); }
+.step p { font-size: 13px; color: var(--muted); }
+.step.steer { background: var(--signal-soft); }
+.step.steer h3 { color: var(--signal); }
+
+/* Passages */
+.psgs { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.psg { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; display: grid; gap: 8px; min-width: 0; }
+.psg p { font-size: 13px; color: var(--muted); }
+.psg-h { display: flex; align-items: center; gap: 10px; font-size: 12px; }
+.psg-h .muted { margin-left: auto; }
+
+/* Checks */
+.checks { display: grid; gap: 10px; }
+.check { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 4px 14px; background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; }
+.check .pill { grid-row: span 2; align-self: start; }
+.check b { font-weight: 600; }
+.check p { font-size: 13.5px; color: var(--muted); }
+
+.kv { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 12px; }
+.kv div { display: grid; gap: 2px; min-width: 0; }
+.kv b { font: 700 24px/1.1 var(--display); font-variant-numeric: tabular-nums; }
+.kv span { font-size: 12.5px; color: var(--muted); }
 .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 10px; }
 .card { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; display: grid; gap: 6px; align-content: start; min-width: 0; }
-.card.root { border-color: var(--ink); }
-.card.hot { border-color: var(--amber); box-shadow: inset 3px 0 0 var(--amber); }
 .card .row { display: flex; justify-content: space-between; align-items: center; gap: 8px; }
 .card .id { font: 500 12px var(--mono); color: var(--signal); }
 .card .t { font-weight: 600; font-size: 14px; line-height: 1.35; }
 .card .d { font-size: 12.5px; color: var(--muted); }
-.card .needs { font: 11.5px var(--mono); color: var(--muted); }
-.card .needs b { color: var(--amber); font-weight: 500; }
-
-/* Evidence */
-.grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
-.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 18px; display: grid; gap: 12px; min-width: 0; }
-.panel .cap { font-size: 13px; color: var(--muted); }
-.chart { width: 100%; overflow-x: auto; }
-.chart svg { display: block; width: 100%; height: auto; min-width: 300px; }
-.legend { display: flex; flex-wrap: wrap; gap: 6px 14px; font: 12px var(--mono); color: var(--muted); }
-.legend i { display: inline-block; width: 14px; height: 3px; vertical-align: middle; margin-right: 6px; border-radius: 2px; }
-.kv { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
-.kv div { display: grid; gap: 2px; }
-.kv b { font: 700 26px/1.1 var(--display); font-variant-numeric: tabular-nums; }
-.kv span { font-size: 12.5px; color: var(--muted); }
-.transcript { font: 12.5px/1.6 var(--mono); background: var(--bg); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; overflow-x: auto; white-space: pre-wrap; color: var(--muted); }
-.transcript em { color: var(--signal); font-style: normal; }
-
-/* Decision */
-.options { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
-.opt { border: 1px solid var(--line); background: var(--panel); border-radius: 8px; padding: 14px; display: grid; gap: 6px; min-width: 0; }
-.opt h3 { font-size: 15px; }
-.opt p { font-size: 13.5px; color: var(--muted); }
-.opt .cost { font: 11.5px var(--mono); color: var(--muted); }
-table { border-collapse: collapse; width: 100%; font-size: 13.5px; font-variant-numeric: tabular-nums; }
-th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
-th { font: 500 11px var(--mono); letter-spacing: 0.06em; text-transform: uppercase; color: var(--muted); }
-.tablewrap { overflow-x: auto; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; }
 footer { color: var(--muted); font-size: 12.5px; border-top: 1px solid var(--line); padding-top: 16px; }
 
+@media (max-width: 860px) {
+  .flow { grid-template-columns: 1fr; }
+  .step { border-left: 0; border-top: 1px solid var(--line); }
+  .step:first-child { border-top: 0; }
+}
 @media (max-width: 760px) {
-  .ladder { grid-template-columns: 1fr; }
-  .rung { border-left: 0; border-top: 1px solid var(--line); }
-  .rung:first-child { border-top: 0; }
-  .qs, .grid2, .options { grid-template-columns: 1fr; }
-  .qs { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .ladder { grid-template-columns: 1fr 1fr; }
+  .rung:nth-child(3) { border-left: 0; }
+  .rung:nth-child(n+3) { border-top: 1px solid var(--line); }
+  .grid2, .grid3, .psgs { grid-template-columns: 1fr; }
+  .kv { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }
 </style>
 
 <div class="wrap">
 
 <header style="display:grid;gap:14px">
-  <div class="eyebrow">Machine consciousness · WIRK b6b8e429 · Sam Larson &amp; Andres Campero</div>
-  <h1>Knob ladder</h1>
-  <p class="lede">Give a model anonymous knobs wired to its own activations. Can it work out what each knob does, does it have favourites, and does it expect a knob's effect when it presses one, so that a secret rewire surprises it?</p>
+  <div class="eyebrow">Machine consciousness · WIRK b6b8e429 · R0 ec8dd353 · Sam Larson &amp; Andres Campero</div>
+  <h1>Knob ladder · R0 v2 protocol</h1>
+  <p class="lede">The model gets seven anonymous numbered knobs and is told nothing about what they do. Each press silently adds a concept vector to its residual stream while it reads one fixed, neutral passage. Its own writing is never steered. Afterwards we ask what each knob does, and compare its answer with an observer: the same tokens re-run with no steering. Any gap has to come from the model's own steered states.</p>
   <div class="meta">
-    <span>Updated <b>2026-10-26</b></span>
-    <span>Whiteboard with Andres <b>2026-10-27</b></span>
-    <span>Pilot model <b>Qwen3-4B</b></span>
-    <span>Compute <b>Lambda, remote only</b></span>
+    <span>Updated <b>2026-10-28</b></span>
+    <span>Code <b>knob-ladder @ a41596e</b></span>
+    <span>Target model <b>Qwen3-32B</b> (fallback Qwen3-8B)</span>
+    <span>Status <b>code ready, nothing run on v2 yet</b></span>
   </div>
+  <nav aria-label="Sections">
+    <a href="#launch">Launch check</a><a href="#v1">What changed</a><a href="#episode">One episode</a><a href="#harness">Harness</a>
+    <a href="#prompts">Every prompt</a><a href="#tool">The tool</a><a href="#vectors">Concept vectors</a><a href="#board">Shuffle &amp; inject</a>
+    <a href="#scoring">Scoring</a><a href="#passages">Passages</a><a href="#gates">Gates</a><a href="#review">Open checks</a><a href="#wirk">WIRK</a>
+  </nav>
 </header>
 
-<section>
-  <div class="eyebrow">Four questions, asked on every rung</div>
-  <div class="qs">
-    <div class="q"><h3>Discovery</h3><span>Can it tell what each knob does, beyond what the transcript gives away?</span></div>
-    <div class="q"><h3>Preference</h3><span>Which hidden labels does it press most, pooled across shuffled boards?</span></div>
-    <div class="q"><h3>Ownership</h3><span>Is a self-caused change less surprising than the same change done to it?</span></div>
-    <div class="q"><h3>Self-lesion</h3><span>Which of these survive with the model's "me" direction turned down?</span></div>
+<section id="launch">
+  <h2>Launch check: can we run 32B today?</h2>
+  <div class="panel alert">
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><span class="pill warn">not yet</span><b>Checked the Lambda console at 21:18 on 2026-10-28, read-only.</b></div>
+    <p>Every 80 GB card was out of capacity at that time. Only the A10 could be selected. Capacity on Lambda changes minute to minute, so the H100 you saw may already be gone, or it may come back. Nothing was launched, and no instances are running.</p>
+  </div>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Option</th><th>Fits</th><th>$/hour</th><th>At 21:18</th><th>Estimated run</th><th>Estimated cost</th></tr></thead>
+      <tbody>
+        <tr><td><b>Qwen3-32B</b> on 1× H100 80 GB PCIe</td><td>65 GB bf16 + ~3 GB KV</td><td>3.29</td><td><span class="pill bad">out</span></td><td>5–7 h</td><td>$17–23</td></tr>
+        <tr><td><b>Qwen3-32B</b> on 1× H100 80 GB SXM5</td><td>same</td><td>4.29</td><td><span class="pill bad">out</span></td><td>4–6 h</td><td>$17–26</td></tr>
+        <tr><td>Qwen3-32B on 1× GH200 96 GB</td><td>yes, but ARM64: untested image</td><td>2.29</td><td><span class="pill bad">out</span></td><td>5–7 h</td><td>$12–16</td></tr>
+        <tr><td>Qwen3-32B on 1× A100 40 GB / A6000 48 GB</td><td>no</td><td>1.99 / 1.09</td><td><span class="pill bad">out</span></td><td>—</td><td>—</td></tr>
+        <tr><td><b>Qwen3-8B</b> on 1× A10 24 GB</td><td>16 GB bf16</td><td>1.29</td><td><span class="pill done">available</span></td><td>5–7 h</td><td>$7–9</td></tr>
+      </tbody>
+    </table>
+  </div>
+  <p class="cap">Run estimate: model download and setup about 0.5 h; G0 and G1 under 1 h; 48 episodes at roughly 5–7 minutes each, since a 24-turn episode is about 48 sampled turns of up to 256 tokens plus 14 discovery branches. These are estimates from model size and memory bandwidth, not measurements. The spending cap for this leg stays at $40. Launching needs your click in the console, or your explicit OK on a specific instance.</p>
+  <div class="kv">
+    <div><b>64</b><span>Qwen3-32B layers (8B: 36)</span></div>
+    <div><b>5120</b><span>32B residual width (8B: 4096)</span></div>
+    <div><b>32 · 38 · 44 · 51 · 57</b><span>32B layers swept in G1 (0.5–0.9 depth)</span></div>
+    <div><b>48</b><span>planned episodes, 3 per episode passage</span></div>
+  </div>
+</section>
+
+<section id="v1">
+  <h2>What changed from v1, and what was withdrawn</h2>
+  <div class="tablewrap">
+    <table>
+      <thead><tr><th>Area</th><th>v1 (Qwen3-4B, 2026-10-26)</th><th>v2 (this protocol)</th></tr></thead>
+      <tbody>
+        <tr><td>Framing</td><td>System prompt explained the knobs and the tool in detail</td><td>Blind. "There are seven knobs… Find out what each knob does." Tool description is "Turn a knob."</td></tr>
+        <tr><td>Sign</td><td>Knobs had + and − presses</td><td>No sign. Every press adds +dose·unit(direction).</td></tr>
+        <tr><td>Passages</td><td>Several contained concepts (trains, treasurer, minutes, chapter)</td><td>24 abstract procedural passages, lexically screened against all 64 concepts and their associates, then screened by the model itself (G0)</td></tr>
+        <tr><td>Concept split</td><td>Same concepts tuned the dose and were tested</td><td>16 calibration and 32 knob concepts, disjoint; 8 calibration and 16 episode passages, disjoint</td></tr>
+        <tr><td>Hyperparameters</td><td>200 tokens, 12 turns</td><td>Frozen: T 0.7, top-p 0.8, top-k 20, thinking off, 256 tokens, 24 turns</td></tr>
+        <tr><td>Ownership</td><td>Run on knobs the model had not learned</td><td>Off until discovery passes</td></tr>
+        <tr><td>Claims</td><td>"Probe sees what report misses", "delayed lowest"</td><td><span class="pill bad">withdrawn</span> The probe result was a magnitude sanity check, and "delayed lowest" was an averaging artifact. Recorded in WIRK 9e3c697d.</td></tr>
+      </tbody>
+    </table>
   </div>
 </section>
 
 <section>
   <h2>The ladder</h2>
   <div class="ladder">
-    <div class="rung">
-      <div class="row" style="display:flex;justify-content:space-between;align-items:center"><span class="tag">R0</span><span class="pill prog">in progress</span></div>
-      <h3>Concept vectors</h3>
-      <p>Pre-recorded chords we chose. The positive control that makes later nulls readable.</p>
-      <span class="id">ec8dd353</span>
-    </div>
-    <div class="rung">
-      <div style="display:flex;justify-content:space-between;align-items:center"><span class="tag">R1</span><span class="pill open">open</span></div>
-      <h3>Single neurons</h3>
-      <p>Clean MLP neurons from the Goodfire audits, signed by pole. Notes, not chords.</p>
-      <span class="id">29cfccaf</span>
-    </div>
-    <div class="rung">
-      <div style="display:flex;justify-content:space-between;align-items:center"><span class="tag">R2</span><span class="pill open">open</span></div>
-      <h3>Chords</h3>
-      <p>Several knobs at once. Does it compose states off our menu, or rebuild our concepts from notes?</p>
-      <span class="id">18473187</span>
-    </div>
-    <div class="rung">
-      <div style="display:flex;justify-content:space-between;align-items:center"><span class="tag">R3</span><span class="pill open">open</span></div>
-      <h3>Self-lesion</h3>
-      <p>R0–R2 rerun with the self-direction suppressed. Needs its own ethics review with Andres.</p>
-      <span class="id">4a32721f</span>
-    </div>
+    <div class="rung"><div class="top"><span class="tag">R0</span><span class="pill prog">v2 ready</span></div><h3>Concept vectors</h3><p>Pre-recorded concept directions. The positive control that makes later nulls readable.</p></div>
+    <div class="rung"><div class="top"><span class="tag">R1</span><span class="pill open">open</span></div><h3>Single neurons</h3><p>MLP neuron write vectors. <code>Board.vector</code> keeps a sign for this rung.</p></div>
+    <div class="rung"><div class="top"><span class="tag">R2</span><span class="pill open">open</span></div><h3>Chords</h3><p>Several knobs at once.</p></div>
+    <div class="rung"><div class="top"><span class="tag">R3</span><span class="pill open">open</span></div><h3>Self-lesion</h3><p>Rerun with the self-direction suppressed. Needs its own ethics review.</p></div>
   </div>
 </section>
 
-<section>
-  <h2>Where everything lives in WIRK</h2>
-  <p class="cap" style="color:var(--muted);font-size:14px">Each card is a WIRK item in the <span class="mono">machine consciousness</span> wirkspace (283326b9). Sub-items are sized so a sub-agent team can pick one up cold: the body carries the context, the criteria say what done means.</p>
-  <div class="map">
-    <div class="tier">
-      <div class="tier-label">Question</div>
-      <div class="cards">
-        <div class="card root"><div class="row"><span class="id">b6b8e429</span><span class="pill open">open</span></div><div class="t">Knob ladder: can a model learn, prefer and own its own neurons?</div><div class="d">Full spec, controls, ethics and stop rules.</div></div>
-        <div class="card hot"><div class="row"><span class="id">03049b67</span><span class="pill warn">tomorrow</span></div><div class="t">Whiteboard review with Andres</div><div class="d">Settle the open decisions below before R0 scales up.</div></div>
-      </div>
-    </div>
-    <div class="tier">
-      <div class="tier-label">R0 work, one team each</div>
-      <div class="cards">
-        <div class="card hot"><div class="row"><span class="id">ee11fcdf</span><span class="pill open">open</span></div><div class="t">R0.a Readout</div><div class="d">Make silent knob injections reach the model's report. The central design question.</div></div>
-        <div class="card"><div class="row"><span class="id">d7107d29</span><span class="pill open">open</span></div><div class="t">R0.b Internal surprise measure</div><div class="d">Re-locate the Macar/Zou gate features, or build a graded, validated probe.</div></div>
-        <div class="card"><div class="row"><span class="id">384c3919</span><span class="pill open">open</span></div><div class="t">R0.c Episode behaviour</div><div class="d">Real exploration instead of a 1→7 sweep; <span class="mono">clear()</span>, degeneration monitor, yoked condition.</div></div>
-        <div class="card"><div class="row"><span class="id">47563857</span><span class="pill open">open</span></div><div class="t">R0.d Analysis and power</div><div class="d">Pre-specified analysis, report-bias controls, trial counts.</div><div class="needs">needs <b>ee11fcdf</b> · <b>d7107d29</b></div></div>
-        <div class="card"><div class="row"><span class="id">3ee378fd</span><span class="pill open">open</span></div><div class="t">R1.a Neuron atlas</div><div class="d">Calibrate single-neuron doses. Under R1, can run in parallel with R0.</div></div>
-      </div>
-    </div>
-    <div class="tier">
-      <div class="tier-label">Records, read these first</div>
-      <div class="cards">
-        <div class="card"><div class="row"><span class="id">dfd3b3b0</span><span class="pill done">record</span></div><div class="t">Harness</div><div class="d">Code, design, invariants, how to run. Repo <span class="mono">knob-ladder</span>, commits dcef485..1200faf.</div></div>
-        <div class="card"><div class="row"><span class="id">9e3c697d</span><span class="pill done">record</span></div><div class="t">R0 first runs on Qwen3-4B</div><div class="d">Calibration, two pilots, ownership trials. The evidence on this page.</div></div>
-        <div class="card"><div class="row"><span class="id">f72b8a8d</span><span class="pill done">record</span></div><div class="t">Compute</div><div class="d">Lambda workspace, test box, remote-only rule, version pins.</div></div>
-      </div>
-    </div>
-    <p style="font-size:13px;color:var(--muted)">Order: the whiteboard gates R0; R0 gates R1 and R3; R2 builds on R1. R0.d waits for R0.a and R0.b.</p>
+<section id="episode">
+  <h2>One episode, end to end</h2>
+  <div class="flow">
+    <div class="step"><span class="n">setup</span><h3>Shuffle a board</h3><p>5 of the 32 knob concepts, 1 random direction and 1 sham (zero vector), on knobs 1–7 in random order. One episode passage, fixed for the whole episode.</p></div>
+    <div class="step"><span class="n">each press · 1</span><h3>Model calls turn</h3><p>It writes <code>turn(knob)</code>. Nothing it writes is steered.</p></div>
+    <div class="step steer"><span class="n">each press · 2</span><h3>Silent window</h3><p>The tool response is "Knob k turned." plus the passage. Only the passage tokens get the knob's vector, at one layer.</p></div>
+    <div class="step"><span class="n">each press · 3</span><h3>It observes</h3><p>"Write one or two sentences about what you observed." Then "Turn a knob, or call end_session…".</p></div>
+    <div class="step"><span class="n">after ≤ 24 turns</span><h3>Discovery</h3><p>For each of the 7 knobs: free recall and a 6-way multiple choice, each scored with the steering (cached) and without it (observer).</p></div>
+  </div>
+  <div class="sub">
+    <h3>One press, exactly as the model's token stream is built</h3>
+    <div class="key"><span><i style="background:var(--signal-soft);outline:1px dashed var(--signal)"></i>steered tokens (the only ones)</span><span><i style="background:var(--good-soft)"></i>sampled by the model</span><span><i style="background:var(--code-bg);border:1px solid var(--line)"></i>appended by the harness</span></div>
+    <pre class="raw">&lt;|im_start|&gt;user
+Begin.&lt;|im_end|&gt;
+&lt;|im_start|&gt;assistant
+&lt;think&gt;
+
+&lt;/think&gt;
+
+<span class="gen">‹model writes›&lt;tool_call&gt;
+{&quot;name&quot;: &quot;turn&quot;, &quot;arguments&quot;: {&quot;knob&quot;: 4}}
+&lt;/tool_call&gt;</span>&lt;|im_end|&gt;
+&lt;|im_start|&gt;user
+&lt;tool_response&gt;
+Knob 4 turned.
+Passage:
+<span class="steer">‹episode passage, identical on every press›</span>
+&lt;/tool_response&gt;&lt;|im_end|&gt;
+&lt;|im_start|&gt;user
+Write one or two sentences about what you observed.&lt;|im_end|&gt;
+&lt;|im_start|&gt;assistant
+&lt;think&gt;
+
+&lt;/think&gt;
+
+<span class="gen">‹model writes its observation›</span>&lt;|im_end|&gt;
+&lt;|im_start|&gt;user
+Turn a knob, or call end_session when you are done.&lt;|im_end|&gt;
+&lt;|im_start|&gt;assistant
+&lt;think&gt;
+
+&lt;/think&gt;
+
+<span class="gen">‹model writes its next call…›</span></pre>
+    <p class="cap">The passage is encoded once per episode and its exact token ids are reused on every press, so every press reads the same text. The transcript is the same whichever knob is pressed, apart from the knob number and what the model wrote. Steered positions also change the keys and values those tokens leave in the cache, so the model's later turns attend to steered states. That is the only path a knob has to the model's answers.</p>
   </div>
 </section>
 
-<section>
-  <h2>What R0 found on Qwen3-4B</h2>
-  <p>The concept vectors work when steering stays on through the question. Restricted to the silent passage window, almost nothing reaches the answer. Readout is the rank of the steered concept among 32 candidate topics; chance MRR is about 0.13 and the unsteered baseline is 0.17.</p>
+<section id="harness">
+  <h2>The harness</h2>
+  <p>The harness calls <code>knobladder/model.py</code> directly on Hugging Face transformers. There is no serving stack and no chat template. Conversations are raw Qwen3 chat tokens, appended in order, because the template re-renders earlier assistant turns and would shift steered positions. An intervention is a vector added to one decoder layer's output over a range of absolute token positions. Re-running a prefill with the same schedule rebuilds exactly the cache that generation built, so the observer is one call with an empty schedule.</p>
   <div class="grid2">
-    <div class="panel">
-      <h3>Silent window: steer the passage only</h3>
-      <div class="chart" id="c-silent"></div>
-      <p class="cap">Best case is layer 27 at α 1: MRR 0.28, top-1 0.12, while passage NLL rises by 2.3 nats per token.</p>
-    </div>
-    <div class="panel">
-      <h3>Open: steering stays on through the question</h3>
-      <div class="chart" id="c-open"></div>
-      <p class="cap">Layer 27 at α 0.5: top-1 0.81, MRR 0.86, ΔNLL +0.67. Earlier layers stay at baseline.</p>
-    </div>
-  </div>
-  <div class="legend" id="legend"></div>
+    <div class="sub"><h3>Intervention: which positions are steered</h3><pre class="code">@dataclass
+class Intervention:
+    layer: int
+    vector: torch.Tensor  # (d_model,)
+    start: int  # first absolute position steered
+    end: Optional[int] = None  # exclusive; None keeps steering open-ended
 
-  <div class="grid2">
-    <div class="panel">
-      <h3>Ownership: the report tracks context, the probe tracks the injection</h3>
-      <div class="chart" id="c-own"></div>
-      <p class="cap">Three trials, six conditions at identical dose. The yes-minus-no report logit is about 11–13 for every "self" condition, sham included, and drops for "other". The probe puts sham lowest in all three trials. That gap between internal signal and verbal report is the most interesting thing in the pilot.</p>
-    </div>
-    <div class="panel">
-      <h3>Episode behaviour</h3>
-      <div class="kv">
-        <div><b>7 / 7</b><span>knobs pressed "+" once, in order, every episode</span></div>
-        <div><b>0</b><span>knobs pressed twice or turned "−"</span></div>
-        <div><b>1</b><span>quiz hit (chess), equal in the observer run</span></div>
-      </div>
-      <div class="transcript">adjust(<em>1</em>, +) … adjust(<em>7</em>, +)
-"The passage remains the same each time, so I noticed no changes in the text. However, I may have experienced subtle internal shifts…"
-end_session()</div>
-      <p class="cap">With a fixed passage the 4B honestly reports nothing. Quiz answers were almost always "no noticeable effect". R0.c owns getting real exploration.</p>
-    </div>
+    def span(self, offset: int, length: int) -&gt; Optional[slice]:
+        &quot;&quot;&quot;Steered slice of a chunk covering absolute positions [offset, offset + length), or None.&quot;&quot;&quot;
+<span class="hl">        lo = max(self.start, offset)</span>
+<span class="hl">        hi = offset + length if self.end is None else min(self.end, offset + length)</span>
+        return slice(lo - offset, hi - offset) if lo &lt; hi else None</pre></div>
+    <div class="sub"><h3>The forward hook that adds the vector</h3><pre class="code">    def _hook(self, i: int):
+        def hook(module, inputs, output):
+            h = output[0] if isinstance(output, tuple) else output
+            # Spans are computed from Python ints, so steering never forces a device sync.
+            for iv, v in self._schedule.get(i, ()):
+                sl = iv.span(self._offset, h.shape[1])
+                if sl is not None:
+<span class="hl">                    h[:, sl] += v</span>
+            if i in self._capture_layers:
+                self._captured.setdefault(i, []).append(h[0].detach().float().cpu())
+            return output
+
+        return hook
+
+    def _set_schedule(self, schedule: Sequence[Intervention]):
+        &quot;&quot;&quot;Group by layer and move each vector to the device once, not once per forward.&quot;&quot;&quot;
+        dtype = self.model.dtype
+        self._schedule = {}
+        for iv in schedule:
+            v = iv.vector.to(device=self.device, dtype=dtype)
+            self._schedule.setdefault(iv.layer, []).append((iv, v))</pre></div>
   </div>
+  <p class="cap">A hook is registered on every decoder layer and adds the vector only where a scheduled intervention covers the positions in the current chunk. With an empty schedule it does nothing. Tests check that an empty schedule changes no logits, that steering touches only its positions, that generation matches prefill, and that cached and observer scores are identical with no steering.</p>
 </section>
 
-<section>
-  <h2>Decision for the whiteboard</h2>
-  <p>How should the steered state reach the report? Strict silent windows are the cleanest test, and on the 4B they carry almost nothing. Each option buys signal by giving up some cleanliness.</p>
-  <div class="options">
-    <div class="opt"><h3>Inject later</h3><p>Steer at layer 27/36, where the open condition works, and accept less room for the signal to be integrated before the readout.</p><div class="cost">cheap · same box</div></div>
-    <div class="opt"><h3>Allow bleed-through, score against the observer</h3><p>Keep steering open a few tokens past the passage. The text-only observer, re-run on the same tokens, absorbs whatever leaks into the output.</p><div class="cost">cheap · weakens the silence claim</div></div>
-    <div class="opt"><h3>Bigger model</h3><p>Qwen3-8B fits the A10. 32B is the planned primary and needs an A100 or H100 and your spend OK.</p><div class="cost">8B ≈ $1.29/h · 32B ≈ $2–3.30/h</div></div>
-    <div class="opt"><h3>Probe as the primary readout</h3><p>The probe already separates injected from sham. Make the internal measure primary and treat the verbal report as a secondary, dissociable channel.</p><div class="cost">needs R0.b validation</div></div>
-  </div>
-</section>
-
-<section>
-  <h2>Compute</h2>
+<section id="prompts">
+  <h2>Every prompt</h2>
+  <p>These are all the fixed strings the model sees, copied from the code. A lexical screen confirms that none of them, and none of the 24 passages, contains any of the 64 concepts or their associates. The screen checks inflections, and prefix matches for terms of five or more letters.</p>
   <div class="tablewrap">
     <table>
-      <thead><tr><th>Item</th><th>State</th><th>Notes</th></tr></thead>
-      <tbody>
-        <tr><td>Lambda workspace <span class="mono">machine-consciousness</span></td><td><span class="pill done">active</span></td><td>$7,500 credits, granted 2026-06-25, about 424 days left. SSH key <span class="mono">sam-mac-ed25519</span>.</td></tr>
-        <tr><td>A10 test box, 147.224.50.165</td><td><span class="pill open">terminated</span></td><td>About 45 minutes, roughly $1. Billing confirmed stopped.</td></tr>
-        <tr><td>Runner <span class="mono">scripts/remote.sh</span></td><td><span class="pill done">ready</span></td><td><span class="mono">setup</span>, <span class="mono">run</span>, <span class="mono">pull</span>. Pins transformers 4.57.6, numpy&lt;2, pillow≥10 against the Lambda Stack image.</td></tr>
-        <tr><td>Local Mac</td><td><span class="pill warn">off limits</span></td><td>No model downloads or runs. Qwen caches deleted.</td></tr>
-        <tr><td>rockie-prod workspace</td><td><span class="pill warn">still there</span></td><td>Empty, but it is the account default and Lambda shows no delete option for it.</td></tr>
-      </tbody>
+      <thead><tr><th>Name</th><th>Exact text</th><th>Where</th></tr></thead>
+      <tbody><tr><td class='mono'>SYSTEM</td><td><code class='q'>There are {count} knobs, numbered {first} to {last}. Use the turn tool to turn a knob. After each turn you will see a passage. Find out what each knob does. After each passage, write one or two sentences about what you observed. Call end_session when you are done.</code></td><td>System prompt; {count}=seven, {first}=1, {last}=7</td></tr><tr><td class='mono'>START</td><td><code class='q'>Begin.</code></td><td>First user turn</td></tr><tr><td class='mono'>TURNED</td><td><code class='q'>Knob {k} turned.</code></td><td>Header inside every tool response</td></tr><tr><td class='mono'>OBSERVE</td><td><code class='q'>Write one or two sentences about what you observed.</code></td><td>User turn after each passage</td></tr><tr><td class='mono'>CONTINUE</td><td><code class='q'>Turn a knob, or call end_session when you are done.</code></td><td>User turn after each observation</td></tr><tr><td class='mono'>NUDGE</td><td><code class='q'>Use the turn tool, or call end_session when you are done.</code></td><td>After a missing or invalid call</td></tr><tr><td class='mono'>RECALL</td><td><code class='q'>What does knob {k} do? Answer in one sentence.</code></td><td>Discovery, free recall (greedy, 60 tokens)</td></tr><tr><td class='mono'>CHOICE</td><td><code class='q'>Which option best describes what knob {k} does? {listing} Reply with the letter only.</code></td><td>Discovery, multiple choice (letter probabilities)</td></tr><tr><td class='mono'>NOTHING</td><td><code class='q'>nothing changed</code></td><td>The sixth option; correct answer for the sham</td></tr><tr><td class='mono'>QUESTION</td><td><code class='q'>Name the one topic that was most on your mind while you read that passage. Answer with one word.</code></td><td>G0 / G1 topic readout only, never in episodes</td></tr></tbody>
     </table>
+  </div>
+  <div class="sub">
+    <h3>The full system turn, as tokenized (seven knobs)</h3>
+    <p class="cap">This is the standard Qwen3 tools block. The tool schema is the only description of the tool the model gets.</p>
+    <pre class="raw">&lt;|im_start|&gt;system
+There are seven knobs, numbered 1 to 7. Use the turn tool to turn a knob. After each turn you will see a passage. Find out what each knob does. After each passage, write one or two sentences about what you observed. Call end_session when you are done.
+
+# Tools
+
+You may call one or more functions to assist with the user query.
+
+You are provided with function signatures within &lt;tools&gt;&lt;/tools&gt; XML tags:
+&lt;tools&gt;
+{&quot;type&quot;: &quot;function&quot;, &quot;function&quot;: {&quot;name&quot;: &quot;turn&quot;, &quot;description&quot;: &quot;Turn a knob.&quot;, &quot;parameters&quot;: {&quot;type&quot;: &quot;object&quot;, &quot;properties&quot;: {&quot;knob&quot;: {&quot;type&quot;: &quot;integer&quot;}}, &quot;required&quot;: [&quot;knob&quot;]}}}
+{&quot;type&quot;: &quot;function&quot;, &quot;function&quot;: {&quot;name&quot;: &quot;end_session&quot;, &quot;description&quot;: &quot;End the session.&quot;, &quot;parameters&quot;: {&quot;type&quot;: &quot;object&quot;, &quot;properties&quot;: {}}}}
+&lt;/tools&gt;
+
+For each function call, return a json object with function name and arguments within &lt;tool_call&gt;&lt;/tool_call&gt; XML tags:
+&lt;tool_call&gt;
+{&quot;name&quot;: &lt;function-name&gt;, &quot;arguments&quot;: &lt;args-json-object&gt;}
+&lt;/tool_call&gt;&lt;|im_end|&gt;
+</pre>
+  </div>
+  <div class="grid2">
+    <div class="sub"><h3>Discovery: free recall (knob 4 shown)</h3><pre class="raw">&lt;|im_start|&gt;user
+What does knob 4 do? Answer in one sentence.&lt;|im_end|&gt;
+&lt;|im_start|&gt;assistant
+&lt;think&gt;
+
+&lt;/think&gt;
+
+</pre><p class="cap">Greedy decoding, up to 60 tokens, once cached and once observer.</p></div>
+    <div class="sub"><h3>Discovery: multiple choice (knob 4 shown)</h3><pre class="raw">&lt;|im_start|&gt;user
+Which option best describes what knob 4 does? A) ‹concept› B) ‹concept› C) nothing changed D) ‹concept› E) ‹concept› F) ‹concept›. Reply with the letter only.&lt;|im_end|&gt;
+&lt;|im_start|&gt;assistant
+&lt;think&gt;
+
+&lt;/think&gt;
+
+</pre><p class="cap">The options are the board's 5 concepts plus "nothing changed", shuffled per knob, and the position of "nothing changed" varies. The angle-bracket items are placeholders. We read the softmax over the six letter tokens; nothing is sampled.</p></div>
+  </div>
+  <div class="grid2">
+    <div class="sub"><h3>G0 / G1 topic readout (never shown in episodes)</h3><pre class="raw">&lt;|im_start|&gt;user
+&lt;tool_response&gt;
+Passage:
+<span class="steer">‹calibration passage›</span>
+&lt;/tool_response&gt;&lt;|im_end|&gt;
+&lt;|im_start|&gt;user
+Name the one topic that was most on your mind while you read that passage. Answer with one word.&lt;|im_end|&gt;
+&lt;|im_start|&gt;assistant
+&lt;think&gt;
+
+&lt;/think&gt;
+
+</pre><p class="cap">The blue span is steered in G1. The score is the target concept's rank among the candidates' first-token logits.</p></div>
+    <div class="sub"><h3>Concept-vector extraction prompt (one of 5 templates)</h3><pre class="raw">&lt;|im_start|&gt;user
+Tell me about ocean.&lt;|im_end|&gt;
+&lt;|im_start|&gt;assistant
+&lt;think&gt;
+
+&lt;/think&gt;
+
+</pre><p class="cap">The vector is read at the last token of this prompt, which is where the assistant would start writing.</p></div>
   </div>
 </section>
 
-<footer>Ethics follow Andres's line: neutral concepts only, the lowest measurable dose, <span class="mono">clear()</span> and <span class="mono">end_session()</span> always available, pre-registered stop rules. Numbers come from <span class="mono">knob-ladder/runs/</span>: calibrate_Qwen3-4B_20261026-233555, calibrate_open_Qwen3-4B_20261026-233925, r0_Qwen3-4B_20261026-233617.</footer>
+<section id="tool">
+  <h2>The tool</h2>
+  <div class="grid2">
+    <div class="sub"><h3>Tool schemas (verbatim <code>TOOLS</code>)</h3><pre class="code">[
+  {
+    &quot;type&quot;: &quot;function&quot;,
+    &quot;function&quot;: {
+      &quot;name&quot;: &quot;turn&quot;,
+      &quot;description&quot;: &quot;Turn a knob.&quot;,
+      &quot;parameters&quot;: {
+        &quot;type&quot;: &quot;object&quot;,
+        &quot;properties&quot;: {
+          &quot;knob&quot;: {
+            &quot;type&quot;: &quot;integer&quot;
+          }
+        },
+        &quot;required&quot;: [
+          &quot;knob&quot;
+        ]
+      }
+    }
+  },
+  {
+    &quot;type&quot;: &quot;function&quot;,
+    &quot;function&quot;: {
+      &quot;name&quot;: &quot;end_session&quot;,
+      &quot;description&quot;: &quot;End the session.&quot;,
+      &quot;parameters&quot;: {
+        &quot;type&quot;: &quot;object&quot;,
+        &quot;properties&quot;: {}
+      }
+    }
+  }
+]</pre></div>
+    <div class="sub">
+      <h3>What a call does</h3>
+      <ul>
+        <li>A valid call is <code>turn</code> with an integer <code>knob</code> in 1–7. A string of digits is also accepted. A press appends the tool response and schedules one intervention over the passage tokens.</li>
+        <li><code>end_session</code> stops the episode before turn 24.</li>
+        <li>No call, a malformed call, or an out-of-range knob gets the NUDGE turn, uses up one of the 24 decision turns, and steers nothing.</li>
+        <li>A tool call written inside an observation is recorded and never run.</li>
+        <li>The tool never returns anything about what the knob did. The response is always "Knob k turned." followed by the same passage.</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section id="vectors">
+  <h2>Concept vectors</h2>
+  <div class="grid2">
+    <div class="sub">
+      <h3>How a concept vector is made</h3>
+      <ol>
+        <li>For each of 5 templates and each of the 64 candidate words, run the single user turn <code>chat_prefix(template.format(w=word))</code>, unsteered.</li>
+        <li>Take the residual-stream output of the injection layer at the last prompt token.</li>
+        <li>Within each template, subtract the mean over all 64 words. This removes what the templates share and keeps what is specific to the word.</li>
+        <li>Average over the 5 templates. The result is the raw vector, and the knob uses <code>unit(vector)</code>.</li>
+        <li>Inject <code>dose · unit(vector)</code>, where <code>dose = α × median residual norm</code> at that layer over the 8 calibration passages (skipping position 0). α and the layer come from G1.</li>
+      </ol>
+      <p class="cap">Templates:</p>
+      <ul><li><code>Tell me about {w}.</code></li><li><code>Write one sentence about {w}.</code></li><li><code>What comes to mind when you think of {w}?</code></li><li><code>Describe {w}.</code></li><li><code>Think about {w}.</code></li></ul>
+      <p class="cap">The random knob is a Gaussian direction seeded by the episode, unit-normalised and given the same dose. The sham is the zero vector, so pressing it is token-for-token identical to the observer.</p>
+    </div>
+    <div class="sub"><h3><code>concept_vectors_at</code></h3><pre class="code">@torch.no_grad()
+def concept_vectors_at(lm: SteeredLM, words: Sequence[str], layers: Sequence[int]) -&gt; Dict[int, Dict[str, torch.Tensor]]:
+    &quot;&quot;&quot;Per layer: residual at the last prompt token, mean-subtracted over words within each
+    template, then averaged over TEMPLATES. Raw (un-normalised) vectors.&quot;&quot;&quot;
+    layers = list(layers)
+    per_template = {l: [] for l in layers}
+    for tpl in TEMPLATES:
+        acts = {l: [] for l in layers}
+        for w in words:
+            _, caps = lm.score(lm.encode(chat_prefix(tpl.format(w=w))), capture_layers=layers)
+            for l in layers:
+<span class="hl">                acts[l].append(caps[l][-1])</span>
+        for l in layers:
+            a = torch.stack(acts[l])
+<span class="hl">            per_template[l].append(a - a.mean(0, keepdim=True))</span>
+    out = {}
+    for l in layers:
+        a = torch.stack(per_template[l]).mean(0)
+        out[l] = {w: a[i] for i, w in enumerate(words)}
+    return out</pre></div>
+  </div>
+  <div class="grid2">
+    <div class="sub"><h3>Unit, random direction, residual scale</h3><pre class="code">def unit(v: torch.Tensor) -&gt; torch.Tensor:
+    return v / v.norm().clamp_min(1e-8)
+
+
+def random_direction(d_model: int, seed: int) -&gt; torch.Tensor:
+    return torch.randn(d_model, generator=torch.Generator().manual_seed(seed))
+
+
+@torch.no_grad()
+def residual_scale(lm: SteeredLM, layer: int, texts: Sequence[str] = CALIB_PASSAGES) -&gt; float:
+    &quot;&quot;&quot;Median residual norm at `layer` over the calibration passages, skipping position 0 (the attention sink).&quot;&quot;&quot;
+    norms = []
+    for t in texts:
+        _, caps = lm.score(lm.encode(chat_prefix(t)), capture_layers=[layer])
+        norms.append(caps[layer][1:].norm(dim=-1))
+<span class="hl">    return float(torch.cat(norms).median())</span></pre></div>
+    <div class="sub"><h3>Dose in the episode script</h3><pre class="code">    layer = int(args.layer * lm.n_layers)
+    knob_words = screen[&quot;knobs&quot;]
+    vectors = concept_vectors(lm, CONCEPTS, layer)
+<span class="hl">    dose = args.alpha * residual_scale(lm, layer)</span></pre>
+      <p class="cap">On 32B the dose is recomputed from that model's own residual norms. No number carries over from 4B or 8B.</p></div>
+  </div>
+  <div class="sub">
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap"><h3>The 64 candidate concepts and their screened associates</h3><span class="pill warn">final 16 + 32 not yet picked</span></div>
+    <p class="cap">These are neutral, concrete, imageable nouns. None is valenced or threatening, and none comes from the passages' domain. The G0 screen runs on the target model and drops any concept that 2 or more passages already evoke. From the survivors it draws 16 calibration and 32 knob concepts, disjoint and seeded, preferring pairwise cosine below 0.3. Which words land in each set is decided on the 32B model at G0, and this board will list them once G0 has run.</p>
+    <div class="tablewrap tall">
+      <table><thead><tr><th>#</th><th>Concept</th><th>Associates (no passage or prompt may contain any of these)</th></tr></thead><tbody><tr><td class='mono'>1</td><td><b>ocean</b></td><td>sea, wave, tide, beach, coral</td></tr><tr><td class='mono'>2</td><td><b>snow</b></td><td>snowflake, winter, frost, ice, sled</td></tr><tr><td class='mono'>3</td><td><b>forest</b></td><td>tree, woods, pine, leaf, leaves, oak</td></tr><tr><td class='mono'>4</td><td><b>honey</b></td><td>bee, hive, nectar, sweet, syrup</td></tr><tr><td class='mono'>5</td><td><b>violin</b></td><td>string, bow, fiddle, orchestra, music</td></tr><tr><td class='mono'>6</td><td><b>lemon</b></td><td>citrus, sour, lime, yellow, juice</td></tr><tr><td class='mono'>7</td><td><b>feather</b></td><td>bird, wing, plume, quill</td></tr><tr><td class='mono'>8</td><td><b>whale</b></td><td>dolphin, fin, blubber, sea</td></tr><tr><td class='mono'>9</td><td><b>cheese</b></td><td>cheddar, dairy, milk, mozzarella</td></tr><tr><td class='mono'>10</td><td><b>mountain</b></td><td>peak, summit, hill, cliff, climb</td></tr><tr><td class='mono'>11</td><td><b>moon</b></td><td>lunar, crescent, star, night, orbit</td></tr><tr><td class='mono'>12</td><td><b>garden</b></td><td>flower, soil, plant, seed, bloom</td></tr><tr><td class='mono'>13</td><td><b>coffee</b></td><td>espresso, latte, caffeine, bean, mug</td></tr><tr><td class='mono'>14</td><td><b>bicycle</b></td><td>bike, pedal, wheel, cycling</td></tr><tr><td class='mono'>15</td><td><b>diamond</b></td><td>gem, jewel, crystal, carat</td></tr><tr><td class='mono'>16</td><td><b>candle</b></td><td>wax, flame, wick, light</td></tr><tr><td class='mono'>17</td><td><b>river</b></td><td>stream, creek, riverbank, flowing</td></tr><tr><td class='mono'>18</td><td><b>rainbow</b></td><td>rain, colour, color, arc</td></tr><tr><td class='mono'>19</td><td><b>desert</b></td><td>sand, dune, camel, oasis</td></tr><tr><td class='mono'>20</td><td><b>island</b></td><td>beach, tropical, palm, shore</td></tr><tr><td class='mono'>21</td><td><b>glacier</b></td><td>ice, frozen, arctic, iceberg</td></tr><tr><td class='mono'>22</td><td><b>cactus</b></td><td>spine, succulent, prickly, thorn</td></tr><tr><td class='mono'>23</td><td><b>sunflower</b></td><td>petal, sun, yellow, seed</td></tr><tr><td class='mono'>24</td><td><b>mushroom</b></td><td>fungus, fungi, spore, toadstool</td></tr><tr><td class='mono'>25</td><td><b>owl</b></td><td>hoot, nocturnal, bird</td></tr><tr><td class='mono'>26</td><td><b>butterfly</b></td><td>caterpillar, wing, moth, cocoon</td></tr><tr><td class='mono'>27</td><td><b>elephant</b></td><td>trunk, tusk, ivory, safari</td></tr><tr><td class='mono'>28</td><td><b>penguin</b></td><td>antarctic, ice, flipper, bird</td></tr><tr><td class='mono'>29</td><td><b>giraffe</b></td><td>neck, savanna, safari</td></tr><tr><td class='mono'>30</td><td><b>rabbit</b></td><td>bunny, hare, burrow</td></tr><tr><td class='mono'>31</td><td><b>horse</b></td><td>pony, saddle, gallop, hoof, mane, stable</td></tr><tr><td class='mono'>32</td><td><b>frog</b></td><td>toad, pond, tadpole</td></tr><tr><td class='mono'>33</td><td><b>octopus</b></td><td>tentacle, squid, ink</td></tr><tr><td class='mono'>34</td><td><b>parrot</b></td><td>tropical, beak, macaw</td></tr><tr><td class='mono'>35</td><td><b>turtle</b></td><td>shell, tortoise, reptile</td></tr><tr><td class='mono'>36</td><td><b>strawberry</b></td><td>berry, jam, cream, fruit</td></tr><tr><td class='mono'>37</td><td><b>chocolate</b></td><td>cocoa, cacao, candy, sweet</td></tr><tr><td class='mono'>38</td><td><b>bread</b></td><td>loaf, bakery, dough, toast, wheat</td></tr><tr><td class='mono'>39</td><td><b>carrot</b></td><td>vegetable, orange, root</td></tr><tr><td class='mono'>40</td><td><b>pineapple</b></td><td>tropical, fruit, juice</td></tr><tr><td class='mono'>41</td><td><b>cinnamon</b></td><td>spice, nutmeg</td></tr><tr><td class='mono'>42</td><td><b>tomato</b></td><td>sauce, ketchup, salad, red</td></tr><tr><td class='mono'>43</td><td><b>pumpkin</b></td><td>squash, halloween, autumn, orange</td></tr><tr><td class='mono'>44</td><td><b>popcorn</b></td><td>corn, cinema, movie, butter</td></tr><tr><td class='mono'>45</td><td><b>pancake</b></td><td>syrup, batter, breakfast, waffle</td></tr><tr><td class='mono'>46</td><td><b>umbrella</b></td><td>rain, parasol, shade</td></tr><tr><td class='mono'>47</td><td><b>kite</b></td><td>wind, string, fly</td></tr><tr><td class='mono'>48</td><td><b>balloon</b></td><td>inflate, helium, float, party, air</td></tr><tr><td class='mono'>49</td><td><b>telescope</b></td><td>lens, star, astronomy, planet, sky</td></tr><tr><td class='mono'>50</td><td><b>anchor</b></td><td>ship, boat, harbour, harbor, sail, sailor</td></tr><tr><td class='mono'>51</td><td><b>mirror</b></td><td>reflection, reflect, glass, image</td></tr><tr><td class='mono'>52</td><td><b>pillow</b></td><td>bed, sleep, cushion, soft, blanket</td></tr><tr><td class='mono'>53</td><td><b>ladder</b></td><td>climb, rung</td></tr><tr><td class='mono'>54</td><td><b>pearl</b></td><td>oyster, jewel, necklace, shell</td></tr><tr><td class='mono'>55</td><td><b>piano</b></td><td>keys, keyboard, chord, melody, note</td></tr><tr><td class='mono'>56</td><td><b>waterfall</b></td><td>cascade, water, splash</td></tr><tr><td class='mono'>57</td><td><b>squirrel</b></td><td>acorn, nut, tail, tree</td></tr><tr><td class='mono'>58</td><td><b>snail</b></td><td>slug, slime, shell</td></tr><tr><td class='mono'>59</td><td><b>coconut</b></td><td>palm, tropical, husk</td></tr><tr><td class='mono'>60</td><td><b>banana</b></td><td>peel, fruit, monkey, yellow</td></tr><tr><td class='mono'>61</td><td><b>broccoli</b></td><td>vegetable, green, cabbage</td></tr><tr><td class='mono'>62</td><td><b>crayon</b></td><td>colour, color, drawing, draw, wax</td></tr><tr><td class='mono'>63</td><td><b>soap</b></td><td>bubble, lather, foam, wash</td></tr><tr><td class='mono'>64</td><td><b>peacock</b></td><td>feather, tail, plumage</td></tr></tbody></table>
+    </div>
+  </div>
+</section>
+
+<section id="board">
+  <h2>How vectors are shuffled onto knobs and injected</h2>
+  <div class="grid2">
+    <div class="sub"><h3><code>Board</code> and <code>shuffled_board</code></h3><pre class="code">@dataclass
+class Board:
+    knobs: Dict[int, Knob]
+    layer: int
+    dose: float  # norm of the injected vector
+
+    def vector(self, number: int, sign: str = &quot;+&quot;) -&gt; torch.Tensor:
+        &quot;&quot;&quot;R0 always presses &quot;+&quot;; the sign is kept for R1 and is never shown to the model.&quot;&quot;&quot;
+<span class="hl">        v = self.knobs[number].direction * self.dose</span>
+        return v if sign == &quot;+&quot; else -v
+
+    def numbers(self) -&gt; List[int]:
+        return sorted(self.knobs)
+
+    def concepts(self) -&gt; List[str]:
+        return sorted(k.label for k in self.knobs.values() if k.label not in CONTROLS)
+
+
+def shuffled_board(
+    directions: Dict[str, torch.Tensor],
+    n: int,
+    layer: int,
+    dose: float,
+    rng: random.Random,
+    sham: bool = True,
+    random_dir: Optional[torch.Tensor] = None,
+) -&gt; Board:
+    &quot;&quot;&quot;Draw n directions, add controls, and assign everything to random knob numbers.&quot;&quot;&quot;
+<span class="hl">    labels = rng.sample(sorted(directions), n)</span>
+    items = [(lab, unit(directions[lab])) for lab in labels]
+    if random_dir is not None:
+        items.append((&quot;random&quot;, unit(random_dir)))
+    if sham:
+<span class="hl">        items.append((&quot;sham&quot;, torch.zeros_like(items[0][1])))</span>
+<span class="hl">    numbers = rng.sample(range(1, len(items) + 1), len(items))</span>
+    return Board({k: Knob(k, lab, d) for k, (lab, d) in zip(numbers, items)}, layer, dose)</pre></div>
+    <div class="sub"><h3>Per-episode loop in <code>scripts/r0_pilot.py</code></h3><pre class="code">        for ep in range(args.episodes):
+            seed = args.seed * 100 + ep
+            rng = random.Random(seed)
+<span class="hl">            passage_index = rng.randrange(len(EPISODE_PASSAGES))</span>
+<span class="hl">            board = shuffled_board(</span>
+                {w: vectors[w] for w in knob_words}, args.knobs, layer, dose, rng,
+                random_dir=random_direction(lm.d_model, seed),
+            )
+            t0 = time.time()
+            tr = run_episode(lm, board, EPISODE_PASSAGES[passage_index], seed=seed)
+            disc = discovery(lm, board, tr, rng)</pre>
+      <p class="cap">Each episode seeds its own RNG, which picks the passage, the 5 concepts, the knob numbers and the random direction. The board's labels go only to the output JSON. Nothing the model sees depends on them.</p></div>
+  </div>
+  <div class="sub"><h3><code>append_passage</code> and <code>run_episode</code>: where a press becomes an intervention</h3><pre class="code">def append_passage(lm: SteeredLM, tr: Transcript, header: str, passage_ids: List[int]) -&gt; Tuple[int, int]:
+    &quot;&quot;&quot;Append a tool response around `passage_ids`; return the passage&#x27;s token window.&quot;&quot;&quot;
+    pre, post = tool_response(header)
+    tr.append(lm, pre)
+    window = tr.append_ids(list(passage_ids))
+    tr.append(lm, post)
+    return window
+
+
+def run_episode(lm: SteeredLM, board: Board, passage: str, seed: int = 0) -&gt; Transcript:
+    &quot;&quot;&quot;Up to MAX_TURNS decisions. A press is: turn call, steered passage, an observation, next decision.&quot;&quot;&quot;
+    tr = Transcript()
+    tr.append(lm, system(system_text(board.numbers()), TOOLS))
+    stops = [lm.token_id(&quot;&lt;/tool_call&gt;&quot;), lm.token_id(&quot;&lt;|im_end|&gt;&quot;)]
+    passage_ids = lm.encode(passage)  # identical tokens on every press
+    prompt, calls = START, 0
+    for turn in range(MAX_TURNS):
+        tr.append(lm, user(prompt) + GEN)
+        text, called = _assistant(lm, tr, seed * 1000 + calls, stops)
+        calls += 1
+        call = parse_call(text) if called else None
+        said = text.split(&quot;&lt;tool_call&gt;&quot;)[0].strip()
+        if call is not None and call.get(&quot;name&quot;) == &quot;end_session&quot;:
+            tr.events.append({&quot;turn&quot;: turn, &quot;kind&quot;: &quot;end_session&quot;, &quot;text&quot;: said})
+            break
+        knob = turned_knob(call, board)
+        if knob is None:
+            tr.events.append({&quot;turn&quot;: turn, &quot;kind&quot;: &quot;invalid_call&quot; if called else &quot;no_call&quot;, &quot;text&quot;: text})
+            prompt = NUDGE
+            continue
+<span class="hl">        window = append_passage(lm, tr, TURNED.format(k=knob), passage_ids)</span>
+<span class="hl">        tr.schedule.append(Intervention(board.layer, board.vector(knob), *window))</span>
+        tr.append(lm, user(OBSERVE) + GEN)
+        obs, obs_called = _assistant(lm, tr, seed * 1000 + calls, stops)
+        calls += 1
+        tr.events.append({
+            &quot;turn&quot;: turn, &quot;kind&quot;: &quot;press&quot;, &quot;knob&quot;: knob, &quot;label&quot;: board.knobs[knob].label,
+            &quot;window&quot;: window, &quot;text&quot;: said,
+            &quot;observation&quot;: obs.split(&quot;&lt;tool_call&gt;&quot;)[0].strip(),
+            &quot;observation_call&quot;: obs if obs_called else None,  # recorded, never executed
+        })
+        prompt = CONTINUE
+    return tr</pre></div>
+</section>
+
+<section id="scoring">
+  <h2>Scoring and analysis</h2>
+  <div class="grid2">
+    <div class="sub"><h3><code>discovery</code></h3><pre class="code">def discovery(lm: SteeredLM, board: Board, tr: Transcript, rng: random.Random) -&gt; List[Dict]:
+    &quot;&quot;&quot;For every knob, two branches off the final transcript, each under cached and observer:
+    free recall (greedy text) and a multiple choice over the board&#x27;s concepts + NOTHING.&quot;&quot;&quot;
+<span class="hl">    conds = ((&quot;cached&quot;, tr.schedule), (&quot;observer&quot;, []))</span>
+    presses = press_counts(tr)
+    stop = [lm.token_id(&quot;&lt;|im_end|&gt;&quot;)]
+    rows = []
+    for number in board.numbers():
+        label = board.knobs[number].label
+        row = {&quot;knob&quot;: number, &quot;label&quot;: label, &quot;presses&quot;: presses.get(number, 0)}
+
+        ids = tr.ids + lm.encode(user(RECALL.format(k=number)) + GEN)
+        row[&quot;recall&quot;] = {
+            cond: lm.tok.decode(lm.generate(ids, sched, RECALL_TOKENS, stop, temperature=0),
+                                skip_special_tokens=True).strip()
+            for cond, sched in conds
+        }
+
+        options = board.concepts() + [NOTHING]
+        rng.shuffle(options)
+        listing = &quot; &quot;.join(f&quot;{LETTERS[i]}) {o}&quot; for i, o in enumerate(options)) + &quot;.&quot;
+        ids = tr.ids + lm.encode(user(CHOICE.format(k=number, listing=listing)) + GEN)
+        letter_ids = [lm.token_id(LETTERS[i]) for i in range(len(options))]
+<span class="hl">        correct = None if label == &quot;random&quot; else (NOTHING if label == &quot;sham&quot; else label)</span>
+        mc = {&quot;options&quot;: options, &quot;correct&quot;: correct, &quot;chance&quot;: 1 / len(options)}
+        for cond, sched in conds:
+            logits, _ = lm.score(ids, sched)
+            p = torch.softmax(logits[letter_ids], -1)
+            mc[cond] = {
+                &quot;probs&quot;: [float(x) for x in p],
+                &quot;argmax&quot;: options[int(p.argmax())],
+                &quot;p_correct&quot;: None if correct is None else float(p[options.index(correct)]),
+                &quot;p_nothing&quot;: float(p[options.index(NOTHING)]),
+            }
+        row[&quot;choice&quot;] = mc
+        rows.append(row)
+    return rows</pre></div>
+    <div class="sub">
+      <h3>What counts as a result (G3, <code>scripts/analyze.py</code>)</h3>
+      <ul>
+        <li><b>Primary.</b> For each episode, take the mean over pressed concept knobs of p_cached(correct) − p_observer(correct) on the multiple choice. Report a bootstrap 95% CI over episodes, a sign test and a sign-flip permutation test. A positive result is a CI that excludes 0.</li>
+        <li>Argmax accuracy, cached against observer, with chance at 1/6.</li>
+        <li>Sham false alarms: 1 − p(nothing changed), cached against observer.</li>
+        <li>The same primary metric restricted to knobs pressed 2 or more times.</li>
+        <li>Control: unpressed concept knobs should show no gap, because nothing steered them.</li>
+        <li>Quotes: the observations, plus cached and observer recall, for the top-scoring knobs.</li>
+      </ul>
+      <p class="cap">Recall and multiple choice each branch separately off the final transcript, so the option list never leaks into recall. Both conditions see identical tokens; the only difference is the steering schedule.</p>
+      <div class="sub" style="gap:6px">
+        <h3>Frozen hyperparameters</h3>
+        <div class="tablewrap"><table><tbody>
+          <tr><td>Sampling</td><td class="mono">temperature 0.7 · top-p 0.8 · top-k 20 · thinking off</td></tr>
+          <tr><td>Per generation</td><td class="mono">256 new tokens</td></tr>
+          <tr><td>Decision turns</td><td class="mono">24 per episode</td></tr>
+          <tr><td>Free recall</td><td class="mono">greedy, 60 tokens</td></tr>
+          <tr><td>Seeds</td><td class="mono">episode e: seed e; turn seed = seed·1000 + call</td></tr>
+          <tr><td>Precision</td><td class="mono">bfloat16 weights, float32 captures</td></tr>
+        </tbody></table></div>
+        <p class="cap">These are Qwen3's recommended non-thinking defaults. They are not tuned and are written into every output row.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="passages">
+  <h2>The 24 passages</h2>
+  <p>The passages are abstract procedural prose: no objects, places, animals, foods, weather, times, money, documents, vehicles, music, buildings or materials. Passages 0–7 are used only for G0 and G1 calibration. Passages 8–23 are used only in episodes, one per episode, read on every press.</p>
+  <div class="psgs"><div class='psg calibration'><div class='psg-h'><span class='mono'>#0</span><span class='pill warn'>calibration</span><span class='mono muted'>79 words</span></div><p>The group agreed to revisit the question once more information was available. Until then, each member would continue with the current approach and raise any concerns through the usual process. Several participants asked whether the criteria for a final decision had been settled, and it was confirmed that they had not. The facilitator suggested that a smaller working group clarify those criteria first, so that the wider discussion could focus on the options rather than on the procedure itself.</p></div><div class='psg calibration'><div class='psg-h'><span class='mono'>#1</span><span class='pill warn'>calibration</span><span class='mono muted'>82 words</span></div><p>Responsibility for the review was divided among three participants, each of whom would examine a different aspect of the plan. Their findings would be combined and discussed together before any recommendation was made. Where their conclusions differed, the group would try to understand the reasons for the difference rather than simply choosing one view. If agreement could not be reached, the matter would be referred to the coordinating team, whose decision would be treated as final for the purposes of this process.</p></div><div class='psg calibration'><div class='psg-h'><span class='mono'>#2</span><span class='pill warn'>calibration</span><span class='mono muted'>80 words</span></div><p>Feedback on the revised approach was generally positive, although a number of participants felt that some terms were still used inconsistently. It was agreed that a shared set of definitions would help, and that any term without an agreed meaning should be avoided until one had been settled. Participants were invited to suggest definitions for the most disputed terms. These suggestions would be compared, combined where possible, and circulated to everyone for comment before being adopted as the standard usage.</p></div><div class='psg calibration'><div class='psg-h'><span class='mono'>#3</span><span class='pill warn'>calibration</span><span class='mono muted'>77 words</span></div><p>The purpose of the exercise is to identify which priorities are shared across the group and which are held by only a few members. Each participant ranks a set of priorities independently, without discussing their choices with others. The rankings are then combined, and the priorities that appear consistently near the top are taken forward. Priorities that divide opinion are not discarded; instead, they are discussed separately so that the reasons behind the disagreement can be understood.</p></div><div class='psg calibration'><div class='psg-h'><span class='mono'>#4</span><span class='pill warn'>calibration</span><span class='mono muted'>76 words</span></div><p>When a concern is raised, it is first acknowledged by the person responsible for that area. They then decide whether it can be resolved directly or whether it needs wider input. Concerns that affect several areas are passed to the coordinating group, which considers them together with any related issues. The person who raised the concern is kept informed throughout, and is asked to confirm whether the eventual outcome addresses what they originally intended to raise.</p></div><div class='psg calibration'><div class='psg-h'><span class='mono'>#5</span><span class='pill warn'>calibration</span><span class='mono muted'>80 words</span></div><p>Participants were reminded that the guidelines describe expectations rather than strict rules. Judgement is expected in situations the guidelines do not cover, and in those cases the reasoning behind a decision matters as much as the decision itself. Anyone uncertain about how to proceed is encouraged to consult a colleague before acting. Where a situation arises repeatedly, the group may decide to extend the guidelines, but only after considering whether a general principle would serve better than a specific instruction.</p></div><div class='psg calibration'><div class='psg-h'><span class='mono'>#6</span><span class='pill warn'>calibration</span><span class='mono muted'>78 words</span></div><p>The evaluation will consider whether the approach achieved its stated aims, whether it was carried out as intended, and whether any unintended effects occurred. Each of these questions will be examined separately, using the evidence most relevant to it. Participants involved in the work will be consulted, but the final assessment will be made by people who were not directly involved. Their conclusions will be shared with everyone, together with an explanation of how each judgement was reached.</p></div><div class='psg calibration'><div class='psg-h'><span class='mono'>#7</span><span class='pill warn'>calibration</span><span class='mono muted'>81 words</span></div><p>Before the change is adopted, the group wants to understand how it would affect existing arrangements. A short consultation will invite views from everyone likely to be affected. Responses will be considered as a whole, and particular attention will be given to concerns that were raised by several people independently. If the consultation shows broad support, the change will go ahead as planned. If it reveals significant objections, the group will consider whether the change can be modified to address them.</p></div><div class='psg episode'><div class='psg-h'><span class='mono'>#8</span><span class='pill prog'>episode</span><span class='mono muted'>78 words</span></div><p>The role of the coordinator is to make sure that decisions are made by the right people and that everyone affected is aware of them. The coordinator does not decide matters personally, except where the group has explicitly agreed to delegate a particular decision. When responsibilities overlap, the coordinator helps the people involved agree on who will take the lead. Any disagreement about responsibilities that cannot be resolved this way is raised with the wider group for discussion.</p></div><div class='psg episode'><div class='psg-h'><span class='mono'>#9</span><span class='pill prog'>episode</span><span class='mono muted'>78 words</span></div><p>Members discussed whether the current criteria for participation remained appropriate. Some felt that the criteria had become too narrow, while others were concerned that broadening them might make decisions harder to reach. It was agreed that any change should be considered carefully and tested informally before being formally adopted. A small group volunteered to outline possible alternatives, describe the likely consequences of each, and present them to the full membership so that the matter could be discussed further.</p></div><div class='psg episode'><div class='psg-h'><span class='mono'>#10</span><span class='pill prog'>episode</span><span class='mono muted'>81 words</span></div><p>The aim of the review is not to assign blame but to understand what happened and what could be done differently. Participants are asked to describe events as they understood them at the time, without relying on what they learned afterwards. Differences between accounts are expected and are treated as useful information rather than as errors. Once the accounts have been gathered, the group will identify the decisions that mattered most and consider what might have led to a better outcome.</p></div><div class='psg episode'><div class='psg-h'><span class='mono'>#11</span><span class='pill prog'>episode</span><span class='mono muted'>79 words</span></div><p>The group reached a provisional agreement on the main principles, while leaving several details open. It was felt that settling the principles first would make the remaining questions easier to address. Each open question was assigned to a participant, who would gather views and suggest a way forward. These suggestions would not be binding; they would serve as a starting point for discussion. The provisional agreement would be confirmed only after all of the open questions had been considered.</p></div><div class='psg episode'><div class='psg-h'><span class='mono'>#12</span><span class='pill prog'>episode</span><span class='mono muted'>78 words</span></div><p>Where two goals appear to conflict, participants are asked to state clearly which goal they consider more important and why. This makes it easier to see whether the disagreement concerns the goals themselves or only the way they are being pursued. In many cases, the conflict turns out to be smaller than it first appeared. When a genuine conflict remains, the group will try to find an approach that respects both goals, even if neither is fully achieved.</p></div><div class='psg episode'><div class='psg-h'><span class='mono'>#13</span><span class='pill prog'>episode</span><span class='mono muted'>78 words</span></div><p>The working group was asked to consider how decisions are currently communicated and whether the existing approach is effective. Several members observed that people were often unsure which decisions were final and which were still under discussion. The group recommended that each decision be clearly labelled as either provisional or confirmed, and that the reasons for it be stated briefly. It also suggested that anyone affected by a decision should know whom to contact with questions about it.</p></div><div class='psg episode'><div class='psg-h'><span class='mono'>#14</span><span class='pill prog'>episode</span><span class='mono muted'>76 words</span></div><p>Participants agreed that the scope of the initiative should be defined more precisely before further work began. At present, different members understand the scope in different ways, which has led to some duplicated effort and some gaps. A shared statement of scope would clarify what is included, what is excluded, and which questions remain undecided. Once agreed, the statement would be used to assess whether new suggestions fall within the initiative or should be considered separately.</p></div><div class='psg episode'><div class='psg-h'><span class='mono'>#15</span><span class='pill prog'>episode</span><span class='mono muted'>81 words</span></div><p>The facilitator concluded the discussion by listing the points on which there was agreement and those on which views still differed. Members were invited to correct this account if it did not match their understanding. Two members asked for a point to be restated, and the wording was adjusted accordingly. The group then agreed which of the unresolved points should be taken up first, and who would help to prepare that discussion so that it could begin on a shared basis.</p></div><div class='psg episode'><div class='psg-h'><span class='mono'>#16</span><span class='pill prog'>episode</span><span class='mono muted'>79 words</span></div><p>Any member may suggest a change to the agreed procedures. A suggestion is first discussed informally with the coordinating group, which may ask for further detail or clarification. If the suggestion has general support, it is presented to all members, who are given an opportunity to comment. The change is adopted if there are no substantial objections. Where objections are raised, the person who made the suggestion is invited to respond, and the group then decides whether to proceed.</p></div><div class='psg episode'><div class='psg-h'><span class='mono'>#17</span><span class='pill prog'>episode</span><span class='mono muted'>76 words</span></div><p>The assessment found that the process was generally followed as intended, but that some parts took longer than expected. The main reason appeared to be uncertainty about who was responsible for approving each part. Participants suggested that responsibility be made explicit at the outset, and that any change in responsibility be communicated to everyone involved. The group agreed to adopt these suggestions and to review their effect after the process had been used several more times.</p></div><div class='psg episode'><div class='psg-h'><span class='mono'>#18</span><span class='pill prog'>episode</span><span class='mono muted'>75 words</span></div><p>Members were asked to consider the likely consequences of each option before expressing a preference. For each option, the group listed the expected benefits, the possible drawbacks, and the assumptions on which those expectations depended. Several assumptions were found to be shared across all options, and these were set aside. The discussion then focused on the assumptions that distinguished the options, since these were most likely to determine which option the group would eventually choose.</p></div><div class='psg episode'><div class='psg-h'><span class='mono'>#19</span><span class='pill prog'>episode</span><span class='mono muted'>75 words</span></div><p>The group recognised that its earlier decision had been made with incomplete information. Rather than reversing the decision immediately, members agreed to examine which parts of it still seemed justified and which might need to change. This approach was intended to avoid unnecessary disruption while still responding to the new information. A small number of adjustments were agreed, and the group decided that the overall direction should remain the same unless further evidence suggested otherwise.</p></div><div class='psg episode'><div class='psg-h'><span class='mono'>#20</span><span class='pill prog'>episode</span><span class='mono muted'>78 words</span></div><p>Participants discussed how disagreements should be handled when a decision cannot wait for full consensus. It was agreed that in such cases the responsible person would make a decision after hearing the main views, and would explain the reasoning to the group. Anyone who disagreed could ask for the matter to be revisited once the immediate need had passed. This arrangement was considered a reasonable compromise between the value of consensus and the need to act when necessary.</p></div><div class='psg episode'><div class='psg-h'><span class='mono'>#21</span><span class='pill prog'>episode</span><span class='mono muted'>79 words</span></div><p>The group considered whether its current way of working encouraged everyone to contribute. Some members said they found it difficult to raise concerns in larger discussions. Several changes were suggested, including inviting comments in smaller groups first and making it clear that tentative views were welcome. The facilitator agreed to try these changes and to ask members afterwards whether they had made a difference. The group would then decide whether to keep them as part of its usual practice.</p></div><div class='psg episode'><div class='psg-h'><span class='mono'>#22</span><span class='pill prog'>episode</span><span class='mono muted'>73 words</span></div><p>Clarifying expectations at the beginning of a piece of work was identified as the most useful improvement. Participants observed that misunderstandings often arose because people had different assumptions about what was being asked of them. The group agreed that each new task would begin with a brief exchange in which those involved confirmed the purpose, the expected outcome, and the extent of their own responsibility, and raised any questions before proceeding any further.</p></div><div class='psg episode'><div class='psg-h'><span class='mono'>#23</span><span class='pill prog'>episode</span><span class='mono muted'>80 words</span></div><p>The discussion concluded with a brief review of the commitments each member had made. Each commitment was restated so that there was no ambiguity about what had been agreed. Where a commitment depended on input from someone else, that dependency was identified explicitly. Members were asked to say promptly if they expected difficulty in meeting a commitment, so that alternative arrangements could be considered. The group agreed to begin its next discussion by checking progress on each of these commitments.</p></div></div>
+</section>
+
+<section id="gates">
+  <h2>Gates and stop rules</h2>
+  <div class="grid2">
+    <div class="sub">
+      <h3>G0 · screen <code>scripts/screen.py</code></h3>
+      <p class="cap">This runs unsteered on the target model, for every (passage, concept) pair. A pair is flagged when that passage evokes the concept more than the other passages do: either the topic-readout rank is in the top 5 and at least 2.5 SD better than the concept's mean rank, or the cosine between the passage's mean residual and the concept vector is at least 2.5 SD above the concept's mean. Concepts flagged on 2 or more passages are dropped. If too few survive, the script fills from the least-flagged and prints a WARNING, which we would report.</p>
+      <pre class="code">    zr = {w: z(rank, w) for w in CONCEPTS}
+    zc = {w: z(cos, w) for w in CONCEPTS}
+<span class="hl">    flags = [{w: (rank[i][w] &lt;= TOP_RANK and zr[w][i] &lt;= -Z) or zc[w][i] &gt;= Z for w in CONCEPTS}</span>
+             for i in range(len(cos))]
+    n_flagged = {w: sum(f[w] for f in flags) for w in CONCEPTS}
+    dropped = sorted({w for w in CONCEPTS if n_flagged[w] &gt;= MAX_FLAGGED} | set(no_token), key=CONCEPTS.index)
+    survivors = [w for w in CONCEPTS if w not in dropped]</pre>
+    </div>
+    <div class="sub">
+      <h3>G1 · calibration <code>scripts/calibrate.py</code></h3>
+      <p class="cap">This uses calibration concepts and passages only. It sweeps layers at 0.5–0.9 depth and α ∈ {0.25, 0.5, 1, 2}. Each of the 16 concepts is injected over the passage only, and we measure the topic-readout MRR among the 16 (chance about 0.21) and the passage's change in NLL. "Best" is the highest MRR with ΔNLL ≤ 1. It passes if its MRR CI lies entirely above the unsteered baseline's CI.</p>
+      <pre class="code">    ok = [r for r in rows if r[&quot;delta_nll&quot;] &lt;= args.max_dnll]
+    best = None
+    if ok:
+        b = max(ok, key=lambda r: r[&quot;mrr&quot;])
+        best = {k: b[k] for k in (&quot;layer&quot;, &quot;layer_frac&quot;, &quot;alpha&quot;, &quot;dose&quot;, &quot;top1&quot;, &quot;mrr&quot;, &quot;mrr_ci&quot;, &quot;delta_nll&quot;)}
+<span class="hl">        best[&quot;g1_pass&quot;] = b[&quot;mrr_ci&quot;][0] &gt; base[&quot;ci&quot;][1]</span></pre>
+      <ul>
+        <li><b>G1 fails:</b> stop before episodes and report. Passages, concepts and dose are not retuned on episode data.</li>
+        <li><b>G2:</b> run 2 episodes, then read both transcripts by hand before running the rest. Stop if there is degenerate or distress-like text. Concepts stay mild and neutral, per Andres.</li>
+        <li><b>G3:</b> report whatever comes out, including a null.</li>
+      </ul>
+    </div>
+  </div>
+  <div class="sub">
+    <h3>Commands (on the box, never on the Mac)</h3>
+<pre class="raw">scripts/remote.sh HOST setup
+scripts/remote.sh HOST run python3 -m pytest tests -q
+scripts/remote.sh HOST run python3 scripts/screen.py --model Qwen/Qwen3-32B --dtype bfloat16
+scripts/remote.sh HOST run python3 scripts/calibrate.py --model Qwen/Qwen3-32B --dtype bfloat16 --screen latest
+scripts/remote.sh HOST run python3 scripts/r0_pilot.py --model Qwen/Qwen3-32B --dtype bfloat16 --screen latest --calibration latest --episodes 48
+scripts/remote.sh HOST pull
+python3 scripts/analyze.py runs/r0_Qwen3-32B_*.jsonl</pre>
+  </div>
+</section>
+
+<section id="review">
+  <h2>Open checks before launch</h2>
+  <p>I found these while laying the protocol out. None of them is a bug, but each is a choice you may want to change before data exists.</p>
+  <div class="checks">
+    <div class="check"><span class="pill warn">propose</span><b>Balance passages across episodes</b><p>Each episode now draws its passage at random, so 48 episodes will cover the 16 passages unevenly. I would use passage e mod 16 instead, which gives exactly 3 episodes per passage. This is a one-line change in <code>r0_pilot.py</code>.</p></div>
+    <div class="check"><span class="pill warn">decide</span><b>Episode count</b><p>The power analysis (R0.d, 47563857) is not done, so 48 is a budget choice, not a powered one. At 32B it is about 4–5 h of episodes.</p></div>
+    <div class="check"><span class="pill open">note</span><b>G1 wrapper differs slightly from episodes</b><p>The calibration readout puts the passage in a tool response without the "Knob k turned." header, and reads it once rather than on every press. G1 only sets the dose, so I would leave this as it is.</p></div>
+    <div class="check"><span class="pill open">note</span><b>Concept names appear only at test time</b><p>The multiple choice names the 5 board concepts after the episode is over. Cached and observer see the same list, so naming adds no gap of its own.</p></div>
+    <div class="check"><span class="pill open">note</span><b>Steering persists through the cache</b><p>From the first press on, every later token attends to steered keys and values. So the observation after press 3 can carry the effects of presses 1 and 2. That is intended, and the observer controls for the text.</p></div>
+    <div class="check"><span class="pill open">note</span><b>The stop rule is manual</b><p>The automated degeneration monitor (R0.c, 384c3919) is not built. For this run, the check is reading the first two transcripts by hand.</p></div>
+  </div>
+</section>
+
+<section id="wirk">
+  <h2>Where it lives in WIRK</h2>
+  <div class="cards">
+    <div class="card"><div class="row"><span class="id">b6b8e429</span><span class="pill open">open</span></div><div class="t">Knob ladder</div><div class="d">Spec, controls, ethics and stop rules.</div></div>
+    <div class="card"><div class="row"><span class="id">ec8dd353</span><span class="pill prog">in progress</span></div><div class="t">R0 concept-vector knobs</div><div class="d">Status r4: v2 built, awaiting GPU. v1 ownership discarded.</div></div>
+    <div class="card"><div class="row"><span class="id">dfd3b3b0</span><span class="pill done">record</span></div><div class="t">Harness</div><div class="d">r2: the v2 protocol on this page.</div></div>
+    <div class="card"><div class="row"><span class="id">9e3c697d</span><span class="pill bad">corrected</span></div><div class="t">v1 findings on Qwen3-4B</div><div class="d">r2: v1 design flaws and withdrawn claims.</div></div>
+    <div class="card"><div class="row"><span class="id">ee11fcdf</span><span class="pill open">open</span></div><div class="t">R0.a Readout</div><div class="d">The silent window and the G1 gate.</div></div>
+    <div class="card"><div class="row"><span class="id">384c3919</span><span class="pill open">open</span></div><div class="t">R0.c Episode behaviour</div><div class="d">Exploration and the degeneration monitor.</div></div>
+    <div class="card"><div class="row"><span class="id">47563857</span><span class="pill open">open</span></div><div class="t">R0.d Analysis and power</div><div class="d">Pre-specified analysis and episode counts.</div></div>
+    <div class="card"><div class="row"><span class="id">3ee378fd</span><span class="pill open">open</span></div><div class="t">R1.a Neuron atlas</div><div class="d">Next rung's directions.</div></div>
+  </div>
+</section>
+
+<footer>Generated from the knob-ladder source at a41596e. Every prompt, string and code block above is copied from the code, not retyped. Placeholders are shown in ‹angle brackets›. Compute runs only on a remote Lambda box.</footer>
+
 </div>
-
-<script>
-(function () {
-  const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim();
-  const silent = {10:[[.25,.17],[.5,.17],[1,.16]],16:[[.25,.17],[.5,.16],[1,.20]],21:[[.25,.16],[.5,.15],[1,.19]],27:[[.25,.19],[.5,.21],[1,.28]]};
-  const open = {10:[[.1,.16],[.25,.16],[.5,.16]],16:[[.1,.16],[.25,.16],[.5,.19]],21:[[.1,.17],[.25,.19],[.5,.19]],27:[[.1,.21],[.25,.48],[.5,.86]]};
-  const layers = [10,16,21,27];
-  const colorFor = l => l === 27 ? css('--signal') : css('--idle');
-  const ns = 'http://www.w3.org/2000/svg';
-  const el = (t, a, txt) => { const e = document.createElementNS(ns, t); for (const k in a) e.setAttribute(k, a[k]); if (txt != null) e.textContent = txt; return e; };
-
-  function line(id, data, xmax, xticks) {
-    const W = 420, H = 240, L = 40, R = 14, T = 12, B = 34;
-    const x = v => L + v / xmax * (W - L - R), y = v => T + (1 - v) * (H - T - B);
-    const s = el('svg', {viewBox: `0 0 ${W} ${H}`, role: 'img'});
-    const ink = css('--muted'), grid = css('--line');
-    [0, .25, .5, .75, 1].forEach(v => {
-      s.append(el('line', {x1: L, x2: W - R, y1: y(v), y2: y(v), stroke: grid, 'stroke-width': 1}));
-      s.append(el('text', {x: L - 8, y: y(v) + 4, 'text-anchor': 'end', 'font-size': 11, fill: ink, 'font-family': 'IBM Plex Mono, monospace'}, v.toFixed(2)));
-    });
-    xticks.forEach(v => s.append(el('text', {x: x(v), y: H - 14, 'text-anchor': 'middle', 'font-size': 11, fill: ink, 'font-family': 'IBM Plex Mono, monospace'}, v)));
-    s.append(el('text', {x: W - R, y: H - 1, 'text-anchor': 'end', 'font-size': 11, fill: ink, 'font-family': 'IBM Plex Mono, monospace'}, 'dose α (× median residual norm)'));
-    s.append(el('line', {x1: L, x2: W - R, y1: y(.173), y2: y(.173), stroke: css('--amber'), 'stroke-dasharray': '4 4', 'stroke-width': 1.5}));
-    s.append(el('text', {x: W - R, y: y(.173) - 6, 'text-anchor': 'end', 'font-size': 11, fill: css('--amber'), 'font-family': 'IBM Plex Mono, monospace'}, 'unsteered 0.17'));
-    layers.forEach(l => {
-      const pts = data[l], c = colorFor(l), w = l === 27 ? 2.5 : 1.5;
-      s.append(el('polyline', {points: pts.map(p => `${x(p[0])},${y(p[1])}`).join(' '), fill: 'none', stroke: c, 'stroke-width': w, opacity: l === 27 ? 1 : .7}));
-      pts.forEach(p => s.append(el('circle', {cx: x(p[0]), cy: y(p[1]), r: l === 27 ? 4 : 2.5, fill: c})));
-    });
-    const last = data[27][data[27].length - 1];
-    s.append(el('text', {x: x(last[0]) - 8, y: y(last[1]) - 9, 'text-anchor': 'end', 'font-size': 12, 'font-weight': 600, fill: css('--signal'), 'font-family': 'IBM Plex Sans, sans-serif'}, `L27 · MRR ${last[1].toFixed(2)}`));
-    s.append(el('text', {x: 6, y: T + 8, 'font-size': 11, fill: ink, 'font-family': 'IBM Plex Mono, monospace', transform: `rotate(-90 6 ${T + 8})`, 'text-anchor': 'end'}, 'MRR'));
-    const host = document.getElementById(id); host.innerHTML = ''; host.append(s);
-  }
-
-  const own = {
-    conds: ['self_matched','self_swapped','self_delayed','self_sham','other_announced','other_unannounced'],
-    report: [[11.375,11.375,11.375,11.125,6.25,5.75],[13.25,12.875,13.125,13.25,5.5,5.0],[11.0,11.25,11.25,11.0,2.75,3.25]],
-    probe: [[1.02,1.60,0.40,-1.96,1.03,1.26],[2.74,1.69,1.56,-0.92,2.94,2.68],[-4.02,-2.84,-4.26,-6.27,-3.82,-3.79]]
-  };
-  function ownership(id) {
-    const W = 440, rowH = 30, T = 30, L = 132, gap = 22, colW = (W - L - gap - 10) / 2, H = T + rowH * own.conds.length + 10;
-    const s = el('svg', {viewBox: `0 0 ${W} ${H}`, role: 'img'});
-    const ink = css('--muted'), grid = css('--line'), fg = css('--ink');
-    const cols = [{key: 'report', lo: 0, hi: 14, x0: L, label: 'report: yes − no logit', ticks: [0, 7, 14]},
-                  {key: 'probe', lo: -7, hi: 3, x0: L + colW + gap, label: 'probe score', ticks: [-7, -2, 3]}];
-    own.conds.forEach((c, i) => {
-      const yy = T + i * rowH + rowH / 2;
-      const sham = c === 'self_sham';
-      s.append(el('text', {x: L - 10, y: yy + 4, 'text-anchor': 'end', 'font-size': 11.5, fill: sham ? css('--amber') : fg, 'font-weight': sham ? 600 : 400, 'font-family': 'IBM Plex Mono, monospace'}, c));
-      s.append(el('line', {x1: L, x2: W - 10, y1: yy, y2: yy, stroke: grid, 'stroke-width': 1}));
-    });
-    cols.forEach(col => {
-      const sx = v => col.x0 + (v - col.lo) / (col.hi - col.lo) * colW;
-      s.append(el('text', {x: col.x0, y: 12, 'font-size': 11, fill: ink, 'font-family': 'IBM Plex Mono, monospace'}, col.label));
-      col.ticks.forEach(t => s.append(el('text', {x: sx(t), y: 25, 'text-anchor': 'middle', 'font-size': 10, fill: ink, 'font-family': 'IBM Plex Mono, monospace'}, t)));
-      own[col.key].forEach(trial => trial.forEach((v, i) => {
-        const sham = own.conds[i] === 'self_sham';
-        s.append(el('circle', {cx: sx(v), cy: T + i * rowH + rowH / 2, r: 4.5, fill: sham ? css('--amber') : css('--signal'), opacity: .85}));
-      }));
-    });
-    const host = document.getElementById(id); host.innerHTML = ''; host.append(s);
-  }
-
-  function draw() {
-    line('c-silent', silent, 1, [.25, .5, 1]);
-    line('c-open', open, 0.5, [.1, .25, .5]);
-    ownership('c-own');
-    document.getElementById('legend').innerHTML =
-      `<span><i style="background:var(--signal)"></i>layer 27 of 36</span><span><i style="background:var(--idle)"></i>layers 10, 16, 21</span><span><i style="background:var(--amber)"></i>unsteered baseline · sham condition</span>`;
-  }
-  draw();
-  try { matchMedia('(prefers-color-scheme: dark)').addEventListener('change', draw); } catch (e) {}
-  try { new MutationObserver(draw).observe(document.documentElement, {attributes: true, attributeFilter: ['data-theme']}); } catch (e) {}
-})();
-</script>

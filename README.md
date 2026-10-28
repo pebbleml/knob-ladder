@@ -76,4 +76,4 @@ python3 scripts/analyze.py runs/r0_Qwen3-32B_*.jsonl
 ```
 
 Piloting is on Qwen3-4B, then 8B; 32B is the primary. `docs/knob-ladder-board.html` is the experiment
-overview (published at https://claude.ai/artifact/Pab6t9nHkHraM47ZE4G2GV); it still describes v1.
+overview (published at https://claude.ai/artifact/Pab6t9nHkHraM47ZE4G2GV); it lays out the v2 protocol with prompts and code copied from source.
