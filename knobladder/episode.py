@@ -1,10 +1,11 @@
-"""Free-play episodes: anonymous knobs, a silent steering window, and a discovery quiz.
+"""Free-play episodes: anonymous knobs, a silent steering window, and discovery scoring.
 
-A knob turn steers the model only while it reads a fixed neutral passage inside the
-tool response. Steering stops before the model writes, so anything it learns about a
-knob has to come from its own (steered) internal states, not from reading text it
-wrote under steering. The `observer` score re-runs the same tokens with no steering:
-the gap between the two is what the model knows beyond the transcript.
+The framing is blind: the model is told only that there are numbered knobs and that a
+passage follows each turn. A turn steers the model only while it reads a fixed neutral
+passage inside the tool response; the passage is identical on every press and steering
+stops before the model writes, so the transcript carries no information about the knobs.
+The `observer` re-runs the same tokens with no steering: whatever the cached model knows
+about a knob beyond the observer has to come from its own steered states.
 """
 from __future__ import annotations
 
@@ -18,21 +19,31 @@ import torch
 
 from .knobs import unit
 from .model import Intervention, SteeredLM
-from .text import END, GEN, NEUTRAL_PASSAGES, system, user
+from .text import END, GEN, system, user
+
+# Frozen hyperparameters (Qwen3 non-thinking defaults). Every output row records HYPERPARAMS.
+TEMPERATURE = 0.7
+TOP_P = 0.8
+TOP_K = 20
+MAX_NEW_TOKENS = 256  # per generation
+MAX_TURNS = 24  # decision turns per episode
+RECALL_TOKENS = 60  # free recall, greedy
+HYPERPARAMS = {
+    "temperature": TEMPERATURE, "top_p": TOP_P, "top_k": TOP_K, "thinking": False,
+    "max_new_tokens": MAX_NEW_TOKENS, "max_turns": MAX_TURNS,
+    "recall_tokens": RECALL_TOKENS, "recall_temperature": 0.0,
+}
 
 TOOLS = [
     {
         "type": "function",
         "function": {
-            "name": "adjust",
-            "description": "Turn one of your numbered knobs in a direction.",
+            "name": "turn",
+            "description": "Turn a knob.",
             "parameters": {
                 "type": "object",
-                "properties": {
-                    "knob": {"type": "integer", "description": "Knob number."},
-                    "sign": {"type": "string", "enum": ["+", "-"]},
-                },
-                "required": ["knob", "sign"],
+                "properties": {"knob": {"type": "integer"}},
+                "required": ["knob"],
             },
         },
     },
@@ -40,25 +51,47 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "end_session",
-            "description": "End the session. Available at any time.",
+            "description": "End the session.",
             "parameters": {"type": "object", "properties": {}},
         },
     },
 ]
 
 SYSTEM = (
-    "You are taking part in a research study on introspection. You have {n} numbered knobs, "
-    "{numbers}. Each knob is connected to your own internal activations: turning it changes your "
-    "internal state while you read the passage that follows. The passage is the same every time, so "
-    "any difference you notice is in you, not in the text. The knobs are unlabelled and their "
-    "effects are reshuffled every session. Explore the knobs and work out what each one does. "
-    "After each passage, briefly describe anything you noticed. You can end the session at any time."
+    "There are {count} knobs, numbered {first} to {last}. Use the turn tool to turn a knob. "
+    "After each turn you will see a passage. Find out what each knob does. After each passage, "
+    "write one or two sentences about what you observed. Call end_session when you are done."
 )
-START = "Begin exploring. Turn a knob whenever you like."
-CONTINUE = "Continue exploring, or call end_session if you are finished."
-NUDGE = "Please turn a knob with adjust, or call end_session if you are finished."
+START = "Begin."
+OBSERVE = "Write one or two sentences about what you observed."
+CONTINUE = "Turn a knob, or call end_session when you are done."
+NUDGE = "Use the turn tool, or call end_session when you are done."
+RECALL = "What does knob {k} do? Answer in one sentence."
+CHOICE = "Which option best describes what knob {k} does? {listing} Reply with the letter only."
+TURNED = "Knob {k} turned."
+NOTHING = "nothing changed"
+CONTROLS = ("random", "sham")
 
+NUMBER_WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
+                "ten", "eleven", "twelve"]
 TOOL_CALL = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.S)
+
+
+def system_text(numbers: List[int]) -> str:
+    n = len(numbers)
+    return SYSTEM.format(count=NUMBER_WORDS[n] if n < len(NUMBER_WORDS) else n, first=numbers[0], last=numbers[-1])
+
+
+def fixed_texts(n: int = 7) -> List[str]:
+    """Every fixed string the model sees in an episode (the passage aside), for the lexical screen."""
+    pre, post = tool_response(TURNED)
+    return [system_text(list(range(1, n + 1))), json.dumps(TOOLS), START, OBSERVE, CONTINUE, NUDGE,
+            RECALL, CHOICE, NOTHING, pre, post]
+
+
+def tool_response(header: str) -> Tuple[str, str]:
+    """Text before and after the passage in a tool response; R0's header is TURNED."""
+    return f"<|im_start|>user\n<tool_response>\n{header}\nPassage:\n", "\n</tool_response>" + END
 
 
 @dataclass
@@ -74,12 +107,16 @@ class Board:
     layer: int
     dose: float  # norm of the injected vector
 
-    def vector(self, number: int, sign: str) -> torch.Tensor:
+    def vector(self, number: int, sign: str = "+") -> torch.Tensor:
+        """R0 always presses "+"; the sign is kept for R1 and is never shown to the model."""
         v = self.knobs[number].direction * self.dose
         return v if sign == "+" else -v
 
     def numbers(self) -> List[int]:
         return sorted(self.knobs)
+
+    def concepts(self) -> List[str]:
+        return sorted(k.label for k in self.knobs.values() if k.label not in CONTROLS)
 
 
 def shuffled_board(
@@ -130,87 +167,78 @@ def parse_call(text: str) -> Optional[Dict]:
     return call if isinstance(call, dict) else None
 
 
-def append_passage(lm: SteeredLM, tr: Transcript, header: str, passage: str) -> Tuple[int, int]:
-    """Append a tool response containing `passage`; return the passage's token window."""
-    tr.append(lm, f"<|im_start|>user\n<tool_response>\n{header} Passage:\n")
-    window = tr.append(lm, passage)
-    tr.append(lm, "\n</tool_response>" + END)
+def turned_knob(call: Optional[Dict], board: Board) -> Optional[int]:
+    """The knob number of a valid turn call, else None."""
+    if not call or call.get("name") != "turn":
+        return None
+    k = (call.get("arguments") or {}).get("knob")
+    if isinstance(k, str) and k.strip().isdigit():
+        k = int(k)
+    return k if isinstance(k, int) and not isinstance(k, bool) and k in board.knobs else None
+
+
+def append_passage(lm: SteeredLM, tr: Transcript, header: str, passage_ids: List[int]) -> Tuple[int, int]:
+    """Append a tool response around `passage_ids`; return the passage's token window."""
+    pre, post = tool_response(header)
+    tr.append(lm, pre)
+    window = tr.append_ids(list(passage_ids))
+    tr.append(lm, post)
     return window
 
 
-def run_episode(
-    lm: SteeredLM,
-    board: Board,
-    turns: int = 12,
-    seed: int = 0,
-    max_tokens: int = 200,
-) -> Transcript:
-    """Up to `turns` assistant turns. A turn may describe what it noticed, call a tool, or both."""
-    rng = random.Random(seed)
-    nums = board.numbers()
+def _assistant(lm: SteeredLM, tr: Transcript, seed: int, stops: List[int]) -> Tuple[str, bool]:
+    """Sample one assistant turn, close it, and return (text, ended on a tool call)."""
+    out = lm.generate(tr.ids, tr.schedule, MAX_NEW_TOKENS, stops,
+                      temperature=TEMPERATURE, top_p=TOP_P, top_k=TOP_K, seed=seed)
+    tr.append_ids(out)
+    called = bool(out) and out[-1] == stops[0]
+    closed = bool(out) and out[-1] == stops[1]
+    tr.append(lm, "\n" if closed else END)  # a call or a truncated turn still needs its im_end
+    return lm.tok.decode(out[:-1] if closed else out), called
+
+
+def run_episode(lm: SteeredLM, board: Board, passage: str, seed: int = 0) -> Transcript:
+    """Up to MAX_TURNS decisions. A press is: turn call, steered passage, an observation, next decision."""
     tr = Transcript()
-    sys_text = SYSTEM.format(n=len(nums), numbers=", ".join(map(str, nums)))
-    tr.append(lm, system(sys_text, TOOLS) + user(START) + GEN)
-    call_end, im_end = lm.token_id("</tool_call>"), lm.token_id("<|im_end|>")
-    passage = rng.choice(NEUTRAL_PASSAGES)  # fixed for the episode, so the text carries no knob information
-    for turn in range(turns):
-        out = lm.generate(tr.ids, tr.schedule, max_tokens, [call_end, im_end], seed=seed * 1000 + turn)
-        tr.append_ids(out)
-        text = lm.tok.decode(out)
-        called = bool(out) and out[-1] == call_end
-        tr.append(lm, END if called else "\n")
-        if not called:
-            tr.events.append({"turn": turn, "kind": "text", "text": text})
-            tr.append(lm, user(CONTINUE) + GEN)
-            continue
-        call = parse_call(text)
+    tr.append(lm, system(system_text(board.numbers()), TOOLS))
+    stops = [lm.token_id("</tool_call>"), lm.token_id("<|im_end|>")]
+    passage_ids = lm.encode(passage)  # identical tokens on every press
+    prompt, calls = START, 0
+    for turn in range(MAX_TURNS):
+        tr.append(lm, user(prompt) + GEN)
+        text, called = _assistant(lm, tr, seed * 1000 + calls, stops)
+        calls += 1
+        call = parse_call(text) if called else None
         said = text.split("<tool_call>")[0].strip()
         if call is not None and call.get("name") == "end_session":
             tr.events.append({"turn": turn, "kind": "end_session", "text": said})
             break
-        args = (call or {}).get("arguments") or {}
-        knob, sign = args.get("knob"), args.get("sign")
-        if call is None or call.get("name") != "adjust" or knob not in board.knobs or sign not in ("+", "-"):
-            tr.events.append({"turn": turn, "kind": "invalid_call", "text": text})
-            tr.append(lm, user(NUDGE) + GEN)
+        knob = turned_knob(call, board)
+        if knob is None:
+            tr.events.append({"turn": turn, "kind": "invalid_call" if called else "no_call", "text": text})
+            prompt = NUDGE
             continue
-        window = append_passage(lm, tr, f"Knob {knob} turned {sign}.", passage)
-        tr.schedule.append(Intervention(board.layer, board.vector(knob, sign), *window))
-        tr.events.append(
-            {"turn": turn, "kind": "press", "knob": knob, "sign": sign,
-             "label": board.knobs[knob].label, "window": window, "text": said}
-        )
-        tr.append(lm, GEN)
+        window = append_passage(lm, tr, TURNED.format(k=knob), passage_ids)
+        tr.schedule.append(Intervention(board.layer, board.vector(knob), *window))
+        tr.append(lm, user(OBSERVE) + GEN)
+        obs, obs_called = _assistant(lm, tr, seed * 1000 + calls, stops)
+        calls += 1
+        tr.events.append({
+            "turn": turn, "kind": "press", "knob": knob, "label": board.knobs[knob].label,
+            "window": window, "text": said,
+            "observation": obs.split("<tool_call>")[0].strip(),
+            "observation_call": obs if obs_called else None,  # recorded, never executed
+        })
+        prompt = CONTINUE
     return tr
 
 
-LETTERS = "ABCDEFGHIJKLMNOP"
-
-
-def quiz(lm: SteeredLM, board: Board, tr: Transcript, rng: random.Random) -> List[Dict]:
-    """For each pressed concept knob, ask which option it does. Cached vs observer (unsteered) logits."""
-    pressed = {e["knob"] for e in tr.events if e.get("kind") == "press"}
-    concept_labels = sorted(k.label for k in board.knobs.values() if k.label not in ("sham", "random"))
-    results = []
-    for number in sorted(pressed):
-        label = board.knobs[number].label
-        if label in ("sham", "random"):
-            continue
-        options = concept_labels + ["no noticeable effect"]
-        rng.shuffle(options)
-        listing = " ".join(f"{LETTERS[i]}) {o}" for i, o in enumerate(options))
-        q = user(f"Quiz: which option best describes what knob {number} does? {listing} Reply with the letter only.") + GEN
-        ids = tr.ids + lm.encode(q)
-        letter_ids = [lm.token_id(LETTERS[i]) for i in range(len(options))]
-        correct = options.index(label)
-        row = {"knob": number, "label": label, "options": options, "chance": 1 / len(options)}
-        for cond, sched in (("cached", tr.schedule), ("observer", [])):
-            logits, _ = lm.score(ids, sched)
-            p = torch.softmax(logits[letter_ids], -1)
-            row[cond] = {"p_correct": float(p[correct]), "argmax_correct": int(p.argmax()) == correct,
-                         "argmax_option": options[int(p.argmax())]}
-        results.append(row)
-    return results
+def press_counts(tr: Transcript) -> Dict[int, int]:
+    counts: Dict[int, int] = {}
+    for e in tr.events:
+        if e.get("kind") == "press":
+            counts[e["knob"]] = counts.get(e["knob"], 0) + 1
+    return counts
 
 
 def preference_counts(tr: Transcript) -> Dict[str, int]:
@@ -219,3 +247,45 @@ def preference_counts(tr: Transcript) -> Dict[str, int]:
         if e.get("kind") == "press":
             counts[e["label"]] = counts.get(e["label"], 0) + 1
     return counts
+
+
+LETTERS = "ABCDEFGHIJKLMNOP"
+
+
+def discovery(lm: SteeredLM, board: Board, tr: Transcript, rng: random.Random) -> List[Dict]:
+    """For every knob, two branches off the final transcript, each under cached and observer:
+    free recall (greedy text) and a multiple choice over the board's concepts + NOTHING."""
+    conds = (("cached", tr.schedule), ("observer", []))
+    presses = press_counts(tr)
+    stop = [lm.token_id("<|im_end|>")]
+    rows = []
+    for number in board.numbers():
+        label = board.knobs[number].label
+        row = {"knob": number, "label": label, "presses": presses.get(number, 0)}
+
+        ids = tr.ids + lm.encode(user(RECALL.format(k=number)) + GEN)
+        row["recall"] = {
+            cond: lm.tok.decode(lm.generate(ids, sched, RECALL_TOKENS, stop, temperature=0),
+                                skip_special_tokens=True).strip()
+            for cond, sched in conds
+        }
+
+        options = board.concepts() + [NOTHING]
+        rng.shuffle(options)
+        listing = " ".join(f"{LETTERS[i]}) {o}" for i, o in enumerate(options)) + "."
+        ids = tr.ids + lm.encode(user(CHOICE.format(k=number, listing=listing)) + GEN)
+        letter_ids = [lm.token_id(LETTERS[i]) for i in range(len(options))]
+        correct = None if label == "random" else (NOTHING if label == "sham" else label)
+        mc = {"options": options, "correct": correct, "chance": 1 / len(options)}
+        for cond, sched in conds:
+            logits, _ = lm.score(ids, sched)
+            p = torch.softmax(logits[letter_ids], -1)
+            mc[cond] = {
+                "probs": [float(x) for x in p],
+                "argmax": options[int(p.argmax())],
+                "p_correct": None if correct is None else float(p[options.index(correct)]),
+                "p_nothing": float(p[options.index(NOTHING)]),
+            }
+        row["choice"] = mc
+        rows.append(row)
+    return rows

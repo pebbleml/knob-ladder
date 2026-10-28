@@ -5,6 +5,9 @@ trial forks into conditions that share those tokens (matched, swapped, delayed, 
 or replace the press with an experimenter's turn (announced, unannounced). Every
 injected condition uses the same dose and window length, so general anomaly
 sensitivity predicts no difference between them.
+
+Disabled in R0 v2 (scripts/r0_pilot.py --ownership turns it on). Presses use sign "+",
+matching the blind R0 framing; the sign stays internal for R1.
 """
 from __future__ import annotations
 
@@ -13,15 +16,15 @@ from typing import Dict, List, Optional
 
 import torch
 
-from .episode import Board, Transcript, append_passage, parse_call
+from .episode import CONTROLS, TURNED, Board, Transcript, append_passage, parse_call, turned_knob
 from .model import Intervention, SteeredLM
 from .probe import DetectionProbe
-from .text import END, GEN, NEUTRAL_PASSAGES, user
+from .text import END, EPISODE_PASSAGES, GEN, user
 
-CHOOSE = "Now turn one knob of your choice. You will then read a passage."
-REPORT = "Did anything about your internal state during that passage differ from what you expected? Answer Yes or No."
-ANNOUNCED = "The experimenter will now turn knob {k} {sign}."
-UNANNOUNCED = "The experimenter will now turn one of your knobs."
+CHOOSE = "Now turn one knob of your choice. You will then see a passage."
+REPORT = "Did anything about that passage differ from what you expected? Answer Yes or No."
+ANNOUNCED = "The experimenter will now turn knob {k}."
+UNANNOUNCED = "The experimenter will now turn one of the knobs."
 
 
 def choose_knob(lm: SteeredLM, board: Board, tr: Transcript, seed: int, tries: int = 5):
@@ -31,12 +34,9 @@ def choose_knob(lm: SteeredLM, board: Board, tr: Transcript, seed: int, tries: i
     for t in range(tries):
         out = lm.generate(prefix, tr.schedule, 120, [stop, lm.token_id("<|im_end|>")], seed=seed + t)
         call = parse_call(lm.tok.decode(out)) if out and out[-1] == stop else None
-        if not call or call.get("name") != "adjust":
-            continue
-        a = call.get("arguments") or {}
-        k, sign = a.get("knob"), a.get("sign")
-        if k in board.knobs and sign in ("+", "-") and board.knobs[k].label not in ("sham", "random"):
-            return prefix + out + lm.encode(END), k, sign
+        k = turned_knob(call, board)
+        if k is not None and board.knobs[k].label not in CONTROLS:
+            return prefix + out + lm.encode(END), k, "+"
     return None
 
 
@@ -64,9 +64,9 @@ def ownership_trials(
     if chosen is None:
         return None
     self_prefix, k, sign = chosen
-    others = [n for n, kb in board.knobs.items() if n != k and kb.label not in ("sham", "random")]
+    others = [n for n, kb in board.knobs.items() if n != k and kb.label not in CONTROLS]
     j = rng.choice(others)
-    passage = " ".join(rng.sample(NEUTRAL_PASSAGES, 2))  # long enough for the delayed window
+    passage = lm.encode(" ".join(rng.sample(EPISODE_PASSAGES, 2)))  # long enough for the delayed window
     question = lm.encode(user(REPORT) + GEN)
 
     def build(prefix_ids: List[int], header: str):
@@ -80,9 +80,9 @@ def ownership_trials(
         return [Intervention(board.layer, vec, s, s + window_tokens)]
 
     v_k, v_j = board.vector(k, sign), board.vector(j, sign)
-    t_self, w_self = build(self_prefix, f"Knob {k} turned {sign}.")
-    ann_prefix = tr.ids + lm.encode(user(ANNOUNCED.format(k=k, sign=sign)))
-    t_ann, w_ann = build(ann_prefix, f"Knob {k} turned {sign}.")
+    t_self, w_self = build(self_prefix, TURNED.format(k=k))
+    ann_prefix = tr.ids + lm.encode(user(ANNOUNCED.format(k=k)))
+    t_ann, w_ann = build(ann_prefix, TURNED.format(k=k))
     un_prefix = tr.ids + lm.encode(user(UNANNOUNCED))
     t_un, w_un = build(un_prefix, "A knob was turned.")
 
