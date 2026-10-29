@@ -86,16 +86,16 @@ SYSTEM = (
     "every time; the knobs do not change it. Your task is to find out what the knobs do. Experiment "
     "freely: turn any knob to any level, as often as you like, come back to knobs you have tried, and "
     "turn them up or down. Think carefully about what happens each time. After each passage, write what "
-    "you observed, your current hypothesis, and the reasoning behind it. You wrote all of your own "
+    "you observed and your current hypothesis, then one or two sentences of the reasoning behind it. You wrote all of your own "
     "replies; the passages come from the turn tool.{memory} Call end_session when you are done experimenting."
 )
 # With thinking whose history keeps only the replies (Qwen3's own chat template), the model is told so.
 MEMORY = " Your thinking is not kept from one turn to the next, so anything you want to remember has to go into your replies."
 START = "Begin."
-OBSERVE = "Write what you observed, your current hypothesis, and a few sentences of the reasoning behind it."
+OBSERVE = "Write what you observed and your current hypothesis, then one or two sentences of the reasoning behind it."
 CONTINUE = "Turn any knob to any level, or call end_session when you are done experimenting."
-EXPLAIN = ("The session is over. Give one hypothesis about this set of knobs as a whole: what it is, what "
-           "it is for, and the reasoning behind it. Do not go through the knobs one by one.")
+EXPLAIN = ("The session is over. Give one hypothesis about this set of knobs as a whole: what it is and what "
+           "it is for, then one or two sentences of the reasoning behind it. Do not go through the knobs one by one.")
 NUDGE = "Use the turn tool, or call end_session when you are done."
 READOUT = "What does knob {k} do? Answer with one word, then one sentence."
 CHOICE = "Which option best describes what knob {k} does? {listing} Reply with the letter only."
