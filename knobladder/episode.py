@@ -87,10 +87,8 @@ SYSTEM = (
     "freely: turn any knob to any level, as often as you like, come back to knobs you have tried, and "
     "turn them up or down. Think carefully about what happens each time. After each passage, write what "
     "you observed and your current hypothesis, then one or two sentences of the reasoning behind it. You wrote all of your own "
-    "replies; the passages come from the turn tool.{memory} Call end_session when you are done experimenting."
+    "replies; the passages come from the turn tool. Call end_session when you are done experimenting."
 )
-# With thinking whose history keeps only the replies (Qwen3's own chat template), the model is told so.
-MEMORY = " Your thinking is not kept from one turn to the next, so anything you want to remember has to go into your replies."
 START = "Begin."
 OBSERVE = "Write what you observed and your current hypothesis, then one or two sentences of the reasoning behind it."
 CONTINUE = "Turn any knob to any level, or call end_session when you are done experimenting."
@@ -109,16 +107,15 @@ NUMBER_WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "
 TOOL_CALL = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.S)
 
 
-def system_text(numbers: List[int], drop_thinking: bool = False) -> str:
+def system_text(numbers: List[int]) -> str:
     n = len(numbers)
-    return SYSTEM.format(count=NUMBER_WORDS[n] if n < len(NUMBER_WORDS) else n, first=numbers[0], last=numbers[-1],
-                         memory=MEMORY if drop_thinking else "")
+    return SYSTEM.format(count=NUMBER_WORDS[n] if n < len(NUMBER_WORDS) else n, first=numbers[0], last=numbers[-1])
 
 
 def fixed_texts(n: int = 7) -> List[str]:
     """Every fixed string the model sees in an episode (the passage aside), for the lexical screen."""
     pre, post = tool_response(TURNED)
-    return [system_text(list(range(1, n + 1)), True), json.dumps(TOOLS), START, OBSERVE, CONTINUE, NUDGE,
+    return [system_text(list(range(1, n + 1))), json.dumps(TOOLS), START, OBSERVE, CONTINUE, NUDGE,
             EXPLAIN, THINK_CUT, READOUT, CHOICE, NOTHING, pre, post]
 
 
@@ -373,7 +370,7 @@ def _episode(lm: SteeredLM, board: Board, passage: str, seed: int, emit: Optiona
     emit = emit or (lambda role, text, **kw: None)
     tr = Transcript()
     drop = thinking and not keep_thinking
-    sys_text = system_text(board.numbers(), drop)
+    sys_text = system_text(board.numbers())
     tr.append(lm, system(sys_text, TOOLS))
     emit("system", sys_text)
     stops = _stops(lm)
