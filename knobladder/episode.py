@@ -18,6 +18,7 @@ The multiple choice is kept only for a later, opt-in analysis.
 from __future__ import annotations
 
 import json
+import os
 import random
 import re
 from dataclasses import dataclass, field
@@ -138,6 +139,7 @@ class Board:
     dose: float  # norm of the injected vector at level 10
     window: str = "passage"  # or "observation": steering continues through the model's observation
     steer_tokens: Optional[int] = None  # with "observation": steer only its first n tokens (None: all of it)
+    steer_reply: Optional[int] = None  # with "observation" and thinking: also steer the reply's first n tokens
 
     def vector(self, number: int, level: int = 10, sign: str = "+") -> torch.Tensor:
         """R0 always presses "+"; the sign is kept for R1 and is never shown to the model."""
@@ -270,6 +272,7 @@ def run_episodes(
     reuse_cache: bool = False,
     thinking: bool = False,
     keep_thinking: bool = False,
+    stop_file: Optional[str] = None,
 ) -> List[Transcript]:
     """run_episode for several episodes at once. Each round samples the next assistant turn of every
     unfinished episode in one batch, each with its own schedule and seed; an episode leaves the batch
@@ -282,9 +285,13 @@ def run_episodes(
     first fed, so no cached token would be steered differently by a re-prefill (generate_batch asserts both).
 
     With `thinking`, each turn thinks first; unless `keep_thinking`, the history keeps only its reply, as
-    Qwen3's chat template renders past turns."""
+    Qwen3's chat template renders past turns.
+
+    Once `stop_file` exists, each episode is asked for its final hypothesis instead of its next decision,
+    and records a "stopped" event (a run cut short by its budget, not by the model)."""
     emits = emits or [None] * len(boards)
-    eps = [_episode(lm, *a, thinking=thinking, keep_thinking=keep_thinking) for a in zip(boards, passages, seeds, emits)]
+    eps = [_episode(lm, *a, thinking=thinking, keep_thinking=keep_thinking, stop_file=stop_file)
+           for a in zip(boards, passages, seeds, emits)]
     hp = hyperparams(thinking)
     trs: List[Optional[Transcript]] = [None] * len(eps)
     pending: Dict[int, Tuple[Transcript, int]] = {}
@@ -334,17 +341,27 @@ def _shared(a: List[int], b: List[int]) -> int:
     return next(j for j, (x, y) in enumerate(zip(a, b)) if x != y)
 
 
-def _drop_thinking(lm: SteeredLM, tr: Transcript, start: int):
-    """Rewrite the closed turn at tr.ids[start:] as its reply alone, as Qwen3's chat template renders a past turn."""
+def _drop_thinking(lm: SteeredLM, tr: Transcript, start: int, reply: Optional[Intervention] = None):
+    """Rewrite the closed turn at tr.ids[start:] as its reply alone, as Qwen3's chat template renders a past turn.
+    A window over the reply's first tokens moves with it, less the newlines the rewrite strips."""
     text = lm.tok.decode(tr.ids[start:])
     if "</think>" in text:
+        old = len(tr.ids)
         tr.ids[start:] = lm.encode(text.split("</think>", 1)[1].lstrip("\n"))
+        if reply is not None and reply.start is not None:
+            stripped = (old - reply.start) - (len(tr.ids) - start)
+            n = min(max(0, reply.end - reply.start - stripped), len(tr.ids) - start)
+            reply.start, reply.end = start, start + n
 
 
-def _sample(lm: SteeredLM, tr: Transcript, seed: int, stops: List[int], thinking: bool, keep_thinking: bool = True):
+def _sample(lm: SteeredLM, tr: Transcript, seed: int, stops: List[int], thinking: bool, keep_thinking: bool = True,
+            reply: Optional[Intervention] = None):
     """One assistant turn, as a sub-coroutine of _episode: returns (text, ended on a tool call, forged, fed,
     cut), where fed is the position of the last sampled token, never fed before the turn is closed. Text is
-    the whole turn, thinking included, even when the history keeps only the reply."""
+    the whole turn, thinking included, even when the history keeps only the reply.
+
+    `reply`, an unplaced window in tr.schedule with after=</think>, is placed on the reply's first tokens (after
+    THINK_CUT when the think block is cut), ends where the reply does, and is None-started if never placed."""
     start = len(tr.ids)
     out = yield tr, seed
     cut = thinking and lm.token_id("</think>") not in out
@@ -355,16 +372,20 @@ def _sample(lm: SteeredLM, tr: Transcript, seed: int, stops: List[int], thinking
         tr.append_ids(out)
         tr.append(lm, THINK_CUT)
         head = lm.tok.decode(out) + THINK_CUT
+        if reply is not None:
+            reply.place(len(tr.ids))
         out = yield tr, seed + 500
     fed = len(tr.ids) + len(out) - 1
+    if reply is not None and reply.start is not None:
+        reply.end = max(reply.start, min(reply.end, fed))
     text, called, forged = _close(lm, tr, out, stops)
     if thinking and not keep_thinking:
-        _drop_thinking(lm, tr, start)
+        _drop_thinking(lm, tr, start, reply)
     return head + text, called, forged, fed, cut
 
 
 def _episode(lm: SteeredLM, board: Board, passage: str, seed: int, emit: Optional[Emit], thinking: bool = False,
-             keep_thinking: bool = False):
+             keep_thinking: bool = False, stop_file: Optional[str] = None):
     """run_episode's body as a coroutine: yields (transcript, seed) for each assistant turn and is sent
     the sampled tokens, so that run_episodes can sample many episodes' turns together."""
     emit = emit or (lambda role, text, **kw: None)
@@ -381,6 +402,9 @@ def _episode(lm: SteeredLM, board: Board, passage: str, seed: int, emit: Optiona
     budget = hyperparams(thinking)["max_new_tokens"] * (2 if thinking else 1)
     limit = lm.model.config.max_position_embeddings - 3 * budget - len(passage_ids) - 256
     for turn in range(MAX_TURNS):
+        if stop_file and os.path.exists(stop_file):
+            tr.events.append({"turn": turn, "kind": "stopped", "tokens": len(tr.ids)})
+            break
         if len(tr.ids) > limit:
             tr.events.append({"turn": turn, "kind": "context_full", "tokens": len(tr.ids)})
             break
@@ -414,23 +438,36 @@ def _episode(lm: SteeredLM, board: Board, passage: str, seed: int, emit: Optiona
             iv.end = len(tr.ids) + board.steer_tokens  # the first n tokens the model writes, then off
         emit("user", OBSERVE, knob=knob, label=label, level=level, steered=board.window == "observation")
         turn_start = len(tr.ids)
+        riv = None
+        if board.window == "observation" and board.steer_reply and thinking:
+            riv = Intervention(board.layer, iv.vector, None, after=lm.token_id("</think>"), length=board.steer_reply)
+            tr.schedule.append(riv)
         obs, obs_called, obs_forged, fed, obs_cut = yield from _sample(lm, tr, seed * 1000 + calls, stops, thinking,
-                                                                       keep_thinking)
+                                                                       keep_thinking, riv)
+        reply_steered = None
+        if riv is not None:
+            if riv.start is None:
+                tr.schedule.remove(riv)  # no reply was written
+            else:
+                reply_steered = [riv.start, riv.end]
         # the last sampled token was never fed under the window; a short observation closes it early
         iv.end = max(fed, window[1]) if iv.end is None else min(iv.end, max(fed, window[1]))
         written = max(0, iv.end - turn_start)  # tokens the model wrote while steered
+        # a think block shorter than the thinking window: its reply's first tokens were steered twice
+        overlap = riv is not None and riv.placed is not None and riv.placed < iv.end
         if drop:
             iv.end = min(iv.end, turn_start)  # those tokens were thinking, now gone; the reply is unsteered
         calls += 1
         emit("assistant", obs, knob=knob, label=label, level=level, forged=obs_forged,
              steered=board.window == "observation", observation=True, think_cut=obs_cut,
-             steered_tokens=written)
+             steered_tokens=written, reply_steered_tokens=reply_steered and reply_steered[1] - reply_steered[0])
         tr.events.append({
             "turn": turn, "kind": "press", "knob": knob, "level": level, "label": label,
             "window": window, "steered": [iv.start, iv.end], "text": said,
             "observation": answer(obs, thinking).split("<tool_call>")[0].strip(),
             "observation_call": answer(obs, thinking) if obs_called else None,  # recorded, never executed
             "observation_forged": obs_forged, "think_cut": obs_cut, "steered_written": written,
+            "reply_steered": reply_steered, "reply_overlap": overlap,  # positions in the history the model keeps
             # the board concepts the observation names; the observer reads these words too
             "observation_hits": [c for c in board.concepts() if lexical_hits(answer(obs, thinking), c)],
         })

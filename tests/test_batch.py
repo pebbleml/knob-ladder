@@ -174,7 +174,12 @@ class FakeLM:
     def generate_batch(self, prompts, schedules, max_new_tokens, stop_ids, temperature, top_p, top_k, seeds,
                        batch=None):
         self.sizes.append(len(prompts))
-        return [self.encode(self.reply(p, s)) for p, s in zip(prompts, seeds)]
+        outs = [self.encode(self.reply(p, s)) for p, s in zip(prompts, seeds)]
+        for p, sched, out in zip(prompts, schedules, outs):  # place windows as SteeredLM.generate_batch does
+            for iv in sched:
+                if iv.start is None and iv.after is not None and iv.after in out:
+                    iv.place(len(p) + out.index(iv.after) + 1)
+        return outs
 
     def generate(self, ids, schedule, max_new_tokens, stop_ids, temperature, top_p, top_k, seed):
         return self.generate_batch([ids], [schedule], max_new_tokens, stop_ids, temperature, top_p, top_k, [seed])[0]
@@ -268,6 +273,53 @@ def test_thinking_cut_is_closed_and_steering_stops_after_n_tokens(reuse_cache, k
     ep1 = together[1].events
     assert ep1[0]["kind"] == "press" and (ep1[0]["knob"], ep1[0]["level"]) == (2, 1)
     assert logs[1][2][0] == "assistant" and THINK_CUT in logs[1][2][1]
+
+
+class ReplyFake(ThinkingFake):
+    """Observations think briefly and close their think block; episode 0's are cut off instead."""
+
+    def reply(self, prompt, seed):
+        last = self.decode(prompt[-400:]).rsplit("<|im_start|>user\n", 1)[-1]
+        if last.startswith(OBSERVE) and seed // 1000 != 0 and not self.decode(prompt[-400:]).endswith(THINK_CUT):
+            return "<think>\nhoney\n</think>\n\nIt read the same.<|im_end|>"
+        return super().reply(prompt, seed)
+
+
+@pytest.mark.parametrize("keep_thinking", [True, False])
+@pytest.mark.parametrize("reuse_cache", [False, True])
+def test_reply_start_is_steered_and_moves_with_the_reply(reuse_cache, keep_thinking):
+    boards, seeds = fake_boards(3), [0, 1, 2]
+    for b in boards:
+        b.window, b.steer_tokens, b.steer_reply = "observation", 5, 4
+    passages = [EPISODE_PASSAGES[i] for i in range(3)]
+    together = run_episodes(ReplyFake(), boards, passages, seeds, reuse_cache=reuse_cache, thinking=True,
+                            keep_thinking=keep_thinking)
+    fake = ReplyFake()
+    for i, tr in enumerate(together):
+        solo = run_episodes(ReplyFake(), [boards[i]], [passages[i]], [seeds[i]], thinking=True,
+                            keep_thinking=keep_thinking)[0]
+        assert tr.ids == solo.ids and tr.events == solo.events
+        presses = [e for e in tr.events if e["kind"] == "press"]
+        replies = [iv for iv in tr.schedule if iv.after is not None]
+        assert presses and len(replies) == len(presses)
+        assert [e["reply_steered"] for e in presses] == [[iv.start, iv.end] for iv in replies]
+        assert not any(e["reply_overlap"] for e in presses)
+        for iv in replies:
+            steered = fake.decode(tr.ids[iv.start:iv.end])
+            if i == 0 or not keep_thinking:
+                # after THINK_CUT, or in the history that dropped the think block (and the newlines after it)
+                assert steered == "It r"[:4 if i == 0 else 2]
+            else:
+                assert steered == "\n\nIt" and tr.ids[iv.start - 1] == fake.token_id("</think>")
+
+
+def test_a_stop_file_ends_each_episode_with_its_hypothesis(tmp_path):
+    boards, seeds = fake_boards(2), [0, 1]
+    stop = tmp_path / "STOP"
+    stop.write_text("")
+    trs = run_episodes(FakeLM(), boards, [EPISODE_PASSAGES[0]] * 2, seeds, stop_file=str(stop))
+    for tr in trs:
+        assert [e["kind"] for e in tr.events] == ["stopped", "explanation"]
 
 
 def test_episode_ends_before_the_context_is_full():
@@ -478,12 +530,13 @@ def test_batched_episodes_equal_solo_episodes(lm, monkeypatch, reuse_cache):
 
 
 @exact
-def test_dropped_thinking_with_a_reused_cache_equals_fresh_prefill(lm, monkeypatch):
+@pytest.mark.parametrize("steer_reply", [None, 8])
+def test_dropped_thinking_with_a_reused_cache_equals_fresh_prefill(lm, monkeypatch, steer_reply):
     monkeypatch.setattr(episode, "MAX_TURNS", 3)
     monkeypatch.setattr(episode, "THINKING", {**episode.THINKING, "temperature": 0.0, "max_new_tokens": 64})
     boards, seeds = [board_for(lm, i) for i in range(3)], [0, 1, 2]
     for b in boards:
-        b.window, b.steer_tokens = "observation", 8
+        b.window, b.steer_tokens, b.steer_reply = "observation", 8, steer_reply
     passages = [EPISODE_PASSAGES[i] for i in range(3)]
     fresh = run_episodes(lm, boards, passages, seeds, thinking=True)
     reused = run_episodes(lm, boards, passages, seeds, reuse_cache=True, thinking=True)
@@ -491,3 +544,19 @@ def test_dropped_thinking_with_a_reused_cache_equals_fresh_prefill(lm, monkeypat
         assert a.ids == b.ids and a.events == b.events
         assert "<think>" not in lm.tok.decode(a.ids)
         assert [(iv.start, iv.end) for iv in a.schedule] == [(iv.start, iv.end) for iv in b.schedule]
+    if steer_reply:
+        assert any(iv.after is not None for tr in fresh for iv in tr.schedule)
+
+
+@exact
+def test_a_window_placed_after_a_token_equals_one_placed_in_advance(lm):
+    ids = lm.encode("The river ran past the old mill and")
+    free = lm.generate(ids, [], 12, temperature=0)
+    k = 4
+    v = vec(lm, 40.0)
+    late = Intervention(lm.n_layers // 2, v, None, after=free[k], length=3)
+    a = lm.generate(ids, [late], 12, temperature=0)
+    assert free.index(free[k]) == k  # the trigger's first occurrence is step k
+    assert (late.start, late.end) == (len(ids) + k + 1, len(ids) + k + 4)
+    b = lm.generate(ids, [Intervention(lm.n_layers // 2, v, len(ids) + k + 1, len(ids) + k + 4)], 12, temperature=0)
+    assert a == b

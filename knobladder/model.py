@@ -35,11 +35,19 @@ REVISIONS = {
 class Intervention:
     layer: int
     vector: torch.Tensor  # (d_model,)
-    start: int  # first absolute position steered
+    start: Optional[int]  # first absolute position steered; None until placed (see `after`)
     end: Optional[int] = None  # exclusive; None keeps steering open-ended
+    after: Optional[int] = None  # with start None: placed over the `length` tokens after the row samples this token
+    length: int = 0
+    placed: Optional[int] = None  # where it was placed, kept if the window is moved later
+
+    def place(self, start: int):
+        self.start, self.end, self.placed = start, start + self.length, start
 
     def span(self, offset: int, length: int) -> Optional[slice]:
         """Steered slice of a chunk covering absolute positions [offset, offset + length), or None."""
+        if self.start is None:
+            return None
         lo = max(self.start, offset)
         hi = offset + length if self.end is None else min(self.end, offset + length)
         return slice(lo - offset, hi - offset) if lo < hi else None
@@ -274,6 +282,8 @@ class SteeredLM:
 
         With `batch`, rows continue that batch's cache: its rows must be prefixes of the prompts, and a
         schedule may only add windows over tokens not yet cached (cached tokens are never re-steered).
+        A window with start None and `after` set is placed when its row samples that token, over the tokens
+        that follow it; they are not fed yet, so no fed token is steered differently.
         Returns the new tokens per row, and with `first_logits` also the first step's (rows, vocab) logits.
         """
         n = len(prompts)
@@ -283,8 +293,9 @@ class SteeredLM:
         for p, s, done, old in zip(prompts, schedules, b.ids, b.scheds):
             assert len(p) > len(done) and list(p[:len(done)]) == done, "a cached row must be a proper prefix of its prompt"
             assert len(s) >= len(old) and all(x is y for x, y in zip(old, s)), "a schedule may only grow"
-            assert all(iv.start >= len(done) for iv in s[len(old):]), "a new window covers cached tokens"
+            assert all(iv.start is None or iv.start >= len(done) for iv in s[len(old):]), "a new window covers cached tokens"
             chunks.append(list(p[len(done):]))
+        waits = [[iv for iv in s if iv.start is None and iv.after is not None] for s in schedules]
         gens = [torch.Generator().manual_seed(s) for s in (seeds if seeds is not None else [0] * n)]
         stops = set(stop_ids) | {self.tok.eos_token_id}
         new: List[List[int]] = [[] for _ in range(n)]
@@ -296,6 +307,9 @@ class SteeredLM:
             for step in range(max_new_tokens):
                 for r, t in zip(live, sample_rows(logits[live], temperature, top_p, top_k, [gens[r] for r in live])):
                     new[r].append(t)
+                    for iv in waits[r]:
+                        if iv.start is None and t == iv.after:
+                            iv.place(len(b.ids[r]) + 1)  # t is fed next, at len(b.ids[r])
                 live = [r for r in live if new[r][-1] not in stops]
                 if not live or step == max_new_tokens - 1:
                     break  # the last token is never fed: the cache holds the prompt and all but the last new token

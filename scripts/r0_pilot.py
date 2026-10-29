@@ -53,6 +53,10 @@ def main():
                     help="steer the passage only, or the passage and the observation written after it")
     ap.add_argument("--passage", type=int, default=0, help="EPISODE_PASSAGES index for every episode; -1 cycles")
     ap.add_argument("--steer-tokens", type=int, help="with --window observation: steer only the first n tokens it writes")
+    ap.add_argument("--steer-reply", type=int,
+                    help="with --window observation and --thinking: also steer the reply's first n tokens")
+    ap.add_argument("--stop-file", default=str(ROOT / "runs" / "STOP"),
+                    help="once this file exists, each episode gives its final hypothesis and stops (budget)")
     ap.add_argument("--thinking", action="store_true", help="Qwen3 thinking mode for episode turns (not discovery)")
     ap.add_argument("--keep-thinking", action="store_true",
                     help="with --thinking: keep past think blocks in the history (Qwen3's template drops them)")
@@ -120,7 +124,7 @@ def main():
     live.mkdir(parents=True, exist_ok=True)
     (live / "meta.json").write_text(json.dumps({
         "run": run_id, "model": args.model, "layer": layer, "alpha": args.alpha, "dose": dose, "window": args.window,
-        "steer_tokens": args.steer_tokens, "thinking": args.thinking, "keep_thinking": args.keep_thinking, "episodes": args.episodes, "shard": args.shard, "batch": args.batch, "reuse_cache": args.reuse_cache,
+        "steer_tokens": args.steer_tokens, "steer_reply": args.steer_reply, "thinking": args.thinking, "keep_thinking": args.keep_thinking, "episodes": args.episodes, "shard": args.shard, "batch": args.batch, "reuse_cache": args.reuse_cache,
         "started": time.time()}))
 
     def start(ep):
@@ -132,7 +136,7 @@ def main():
             {w: vectors[w] for w in knob_words}, args.knobs, layer, dose, rng,
             random_dir=random_direction(lm.d_model, seed),
         )
-        board.window, board.steer_tokens = args.window, args.steer_tokens
+        board.window, board.steer_tokens, board.steer_reply = args.window, args.steer_tokens, args.steer_reply
         log = (live / f"ep{ep:03d}.jsonl").open("a")
 
         def note(kind, **fields):
@@ -153,7 +157,7 @@ def main():
             t0 = time.time()
             trs = run_episodes(lm, [e["board"] for e in group], [EPISODE_PASSAGES[e["passage_index"]] for e in group],
                                [e["seed"] for e in group], [e["emit"] for e in group], reuse_cache=args.reuse_cache,
-                               thinking=args.thinking, keep_thinking=args.keep_thinking)
+                               thinking=args.thinking, keep_thinking=args.keep_thinking, stop_file=args.stop_file)
             for e, tr in zip(group, trs):
                 ep, seed, board, note = e["ep"], e["seed"], e["board"], e["note"]
                 disc = discovery(lm, board, tr, firsts, e["rng"] if args.choice else None, batch=args.batch)
@@ -170,7 +174,7 @@ def main():
                     "provenance": prov, "readout_candidates": knob_words, "raw_norm_ratio": raw_norm,
                     "passages_version": PASSAGES_VERSION, "passage_index": e["passage_index"],
                     "layer": layer, "layer_frac": args.layer, "alpha": args.alpha, "dose": dose, "window": args.window,
-                    "steer_tokens": args.steer_tokens, "screen": screen["path"], "calibration": str(calib_path) if calib_path else None,
+                    "steer_tokens": args.steer_tokens, "steer_reply": args.steer_reply, "screen": screen["path"], "calibration": str(calib_path) if calib_path else None,
                     "board": {k: kb.label for k, kb in board.knobs.items()},
                     "events": tr.events,
                     "presses": press_counts(tr),
