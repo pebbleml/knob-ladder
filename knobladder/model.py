@@ -62,6 +62,16 @@ class Batch:
         self.ids = [self.ids[r] for r in rows]
         self.scheds = [self.scheds[r] for r in rows]
 
+    def truncate(self, r: int, n: int):
+        """Keep only row r's first n tokens (a transcript that dropped a think block); compact() then
+        frees the columns. The kept keys are unchanged, so this equals a fresh prefill of those n tokens."""
+        if n == len(self.ids[r]):
+            return
+        cols = self.mask[r].nonzero().flatten()
+        self.mask[r, cols[n:]] = False
+        self.ids[r] = self.ids[r][:n]
+        self.holes = True
+
     def compact(self):
         """Drop unused columns and right-align every row. Order within a row is kept and keys carry
         their rotary positions, so attention is unchanged."""

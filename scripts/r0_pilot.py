@@ -54,6 +54,8 @@ def main():
     ap.add_argument("--passage", type=int, default=0, help="EPISODE_PASSAGES index for every episode; -1 cycles")
     ap.add_argument("--steer-tokens", type=int, help="with --window observation: steer only the first n tokens it writes")
     ap.add_argument("--thinking", action="store_true", help="Qwen3 thinking mode for episode turns (not discovery)")
+    ap.add_argument("--keep-thinking", action="store_true",
+                    help="with --thinking: keep past think blocks in the history (Qwen3's template drops them)")
     ap.add_argument("--episodes", type=int, default=2)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--shard", default="0/1", help="i/n: run episodes e with e %% n == i (scripts/shards.sh)")
@@ -118,7 +120,7 @@ def main():
     live.mkdir(parents=True, exist_ok=True)
     (live / "meta.json").write_text(json.dumps({
         "run": run_id, "model": args.model, "layer": layer, "alpha": args.alpha, "dose": dose, "window": args.window,
-        "steer_tokens": args.steer_tokens, "thinking": args.thinking, "episodes": args.episodes, "shard": args.shard, "batch": args.batch, "reuse_cache": args.reuse_cache,
+        "steer_tokens": args.steer_tokens, "thinking": args.thinking, "keep_thinking": args.keep_thinking, "episodes": args.episodes, "shard": args.shard, "batch": args.batch, "reuse_cache": args.reuse_cache,
         "started": time.time()}))
 
     def start(ep):
@@ -151,7 +153,7 @@ def main():
             t0 = time.time()
             trs = run_episodes(lm, [e["board"] for e in group], [EPISODE_PASSAGES[e["passage_index"]] for e in group],
                                [e["seed"] for e in group], [e["emit"] for e in group], reuse_cache=args.reuse_cache,
-                               thinking=args.thinking)
+                               thinking=args.thinking, keep_thinking=args.keep_thinking)
             for e, tr in zip(group, trs):
                 ep, seed, board, note = e["ep"], e["seed"], e["board"], e["note"]
                 disc = discovery(lm, board, tr, firsts, e["rng"] if args.choice else None, batch=args.batch)
@@ -163,7 +165,7 @@ def main():
                 note("done", seconds=time.time() - t0)  # since the batch started
                 e["log"].close()
                 row = {
-                    "episode": ep, "seed": seed, "model": args.model, "hyperparams": hyperparams(args.thinking),
+                    "episode": ep, "seed": seed, "model": args.model, "hyperparams": hyperparams(args.thinking), "keep_thinking": args.keep_thinking,
                     "batch": args.batch, "reuse_cache": args.reuse_cache,
                     "provenance": prov, "readout_candidates": knob_words, "raw_norm_ratio": raw_norm,
                     "passages_version": PASSAGES_VERSION, "passage_index": e["passage_index"],

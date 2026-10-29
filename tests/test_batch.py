@@ -18,7 +18,7 @@ from knobladder.episode import (
 from knobladder.knobs import CONCEPTS, random_direction
 from knobladder.model import Batch, Intervention, SteeredLM, sample, sample_rows
 from knobladder.readout import first_tokens
-from knobladder.text import EPISODE_PASSAGES, GEN, chat_prefix, system, user
+from knobladder.text import EPISODE_PASSAGES, GEN, GEN_THINK, chat_prefix, system, user
 
 MODEL = os.environ.get("KNOB_TEST_MODEL", "Qwen/Qwen3-0.6B")
 DTYPE = getattr(torch, os.environ.get("KNOB_TEST_DTYPE", "float32"))
@@ -118,6 +118,19 @@ def test_batch_compact_select_fork_keep_each_rows_tokens():
     assert torch.equal(two.cache.layers[0].keys[1], one.cache.layers[0].keys[0])
 
 
+def test_batch_truncate_drops_a_rows_tail():
+    b = Batch(2)
+    b.ids = [[1, 2, 3, 4], [5, 6]]
+    b.mask = torch.tensor([[1, 1, 1, 1], [0, 0, 1, 1]], dtype=torch.bool)
+    k = torch.randn(2, 2, 4, 5)
+    b.cache.update(k, k.clone(), 0)
+    b.truncate(0, 2)
+    b.truncate(1, 2)  # nothing to drop
+    b.compact()
+    assert b.ids == [[1, 2], [5, 6]] and b.cache.layers[0].keys.shape == (2, 2, 2, 5)
+    assert torch.equal(b.cache.layers[0].keys[0], k[0][:, :2]) and torch.equal(b.cache.layers[1 - 1].keys[1], k[1][:, 2:])
+    assert not b.holes
+
 SPECIAL = ["<|im_start|>", "<|im_end|>", "<tool_call>", "</tool_call>", "<tool_response>", "</tool_response>",
            "<think>", "</think>"]
 SPLIT = re.compile("(" + "|".join(map(re.escape, SPECIAL)) + ")")
@@ -203,34 +216,59 @@ def test_run_episodes_equals_each_episode_run_alone(reuse_cache, window):
 
 
 class ThinkingFake(FakeLM):
-    """Thinking mode: every observation's think block runs past the limit; decisions think briefly."""
+    """Thinking mode: every observation's think block runs past the limit; decisions think briefly, and
+    episode 1's first decision writes its call inside a think block it never closes."""
 
     def reply(self, prompt, seed):
         tail = self.decode(prompt[-400:])
+        last = tail.rsplit("<|im_start|>user\n", 1)[-1]
         if tail.endswith(THINK_CUT):
-            return "It read the same.<|im_end|>"
-        if tail.rsplit("<|im_start|>user\n", 1)[-1].startswith(OBSERVE):
+            return "It read the same.<|im_end|>" if last.startswith(OBSERVE) else super().reply(prompt, seed - 500)
+        if last.startswith(OBSERVE):
             return "<think>\nhoney honey honey honey"  # no </think>, no stop: cut off
+        if seed == 1000:
+            return '<think>\nKnob 2.\n<tool_call>\n{"name": "turn", "arguments": {"knob": 2, "level": 3}}\n</tool_call>'
         return "<think>\nok\n</think>\n\n" + super().reply(prompt, seed)
 
 
+@pytest.mark.parametrize("keep_thinking", [True, False])
 @pytest.mark.parametrize("reuse_cache", [False, True])
-def test_thinking_cut_is_closed_and_steering_stops_after_n_tokens(reuse_cache):
+def test_thinking_cut_is_closed_and_steering_stops_after_n_tokens(reuse_cache, keep_thinking):
     boards, seeds = fake_boards(3), [0, 1, 2]
     for b in boards:
         b.window, b.steer_tokens = "observation", 5
     passages = [EPISODE_PASSAGES[i] for i in range(3)]
     fake = ThinkingFake()
-    together = run_episodes(fake, boards, passages, seeds, reuse_cache=reuse_cache, thinking=True)
+    logs = [[] for _ in boards]
+    emits = [lambda role, text, _log=log, **kw: _log.append((role, text, kw)) for log in logs]
+    together = run_episodes(fake, boards, passages, seeds, emits, reuse_cache=reuse_cache, thinking=True,
+                            keep_thinking=keep_thinking)
     first = fake.encode("<think>\nhoney honey honey honey")[:5]
+    gen = fake.encode(user(OBSERVE) + GEN_THINK)
     for i, tr in enumerate(together):
-        solo = run_episodes(ThinkingFake(), [boards[i]], [passages[i]], [seeds[i]], thinking=True)[0]
+        solo = run_episodes(ThinkingFake(), [boards[i]], [passages[i]], [seeds[i]], thinking=True,
+                            keep_thinking=keep_thinking)[0]
         assert tr.ids == solo.ids and tr.events == solo.events
         presses = [e for e in tr.events if e["kind"] == "press"]
         assert presses and all(e["think_cut"] and e["observation"] == "It read the same." for e in presses)
-        for e, iv in zip(presses, tr.schedule):
-            assert tr.ids[iv.end - 5:iv.end] == first  # steered: the passage, OBSERVE, and 5 written tokens
-        assert fake.decode(tr.ids).count(THINK_CUT) == len(presses)
+        assert all(e["steered_written"] == 5 for e in presses)
+        text = fake.decode(tr.ids)
+        if keep_thinking:
+            for iv in tr.schedule:
+                assert tr.ids[iv.end - 5:iv.end] == first  # steered: the passage, OBSERVE, and 5 written tokens
+            assert text.count(THINK_CUT) == len(presses) + (i == 1)
+        else:
+            for iv in tr.schedule:
+                assert tr.ids[iv.end - len(gen):iv.end] == gen  # steered up to the reply, which is not
+            assert "<think>" not in text and "</think>" not in text
+            assert text.count("It read the same.<|im_end|>") == len(presses)
+        # the live log keeps every turn whole, thinking included
+        assert sum("honey" in t for r, t, _ in logs[i] if r == "assistant") == len(presses)
+    # a call written inside an unclosed think block is closed like a cut, and the reply then makes the call
+    ep1 = together[1].events
+    assert ep1[0]["kind"] == "press" and (ep1[0]["knob"], ep1[0]["level"]) == (2, 1)
+    assert logs[1][2][0] == "assistant" and THINK_CUT in logs[1][2][1]
+
 
 def test_episode_ends_before_the_context_is_full():
     boards, passage = fake_boards(3), EPISODE_PASSAGES[0]
@@ -437,3 +475,19 @@ def test_batched_episodes_equal_solo_episodes(lm, monkeypatch, reuse_cache):
         assert tr.ids == solo.ids and tr.events == solo.events
         for iv in tr.schedule:
             assert lm.tok.decode(tr.ids[iv.start:iv.end]) == passage
+
+
+@exact
+def test_dropped_thinking_with_a_reused_cache_equals_fresh_prefill(lm, monkeypatch):
+    monkeypatch.setattr(episode, "MAX_TURNS", 3)
+    monkeypatch.setattr(episode, "THINKING", {**episode.THINKING, "temperature": 0.0, "max_new_tokens": 64})
+    boards, seeds = [board_for(lm, i) for i in range(3)], [0, 1, 2]
+    for b in boards:
+        b.window, b.steer_tokens = "observation", 8
+    passages = [EPISODE_PASSAGES[i] for i in range(3)]
+    fresh = run_episodes(lm, boards, passages, seeds, thinking=True)
+    reused = run_episodes(lm, boards, passages, seeds, reuse_cache=True, thinking=True)
+    for a, b in zip(fresh, reused):
+        assert a.ids == b.ids and a.events == b.events
+        assert "<think>" not in lm.tok.decode(a.ids)
+        assert [(iv.start, iv.end) for iv in a.schedule] == [(iv.start, iv.end) for iv in b.schedule]
