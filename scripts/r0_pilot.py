@@ -65,6 +65,7 @@ def main():
     ap.add_argument("--think-tokens", type=int, help="with --thinking: tokens per turn before the think block is cut "
                                                      "(default per model: Qwen3 1536, Qwen3.5/3.8 4096)")
     ap.add_argument("--effort", choices=sorted(EFFORT), help="with --thinking on Qwen3.8: reasoning effort (default xhigh)")
+    ap.add_argument("--blind", action="store_true", help="print no per-episode scores while running (confirmatory runs)")
     ap.add_argument("--episodes", type=int, default=2)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--shard", default="0/1", help="i/n: run episodes e with e %% n == i (scripts/shards.sh)")
@@ -206,7 +207,8 @@ def main():
                           for d in disc if d["presses"] and d["label"] not in CONTROLS]
                 gap = f"{sum(deltas) / len(deltas):+.3f}" if deltas else "n/a"
                 print(f"episode {ep}: order {row['press_order']}, ended {row['ended']}, "
-                      f"cached-observer readout 1/rank on pressed concepts {gap}, {time.time() - t0:.0f}s")
+                      + ("" if args.blind else f"cached-observer readout 1/rank on pressed concepts {gap}, ")
+                      + f"{time.time() - t0:.0f}s")
     print(out_path)
 
 

@@ -4,7 +4,7 @@
 #   scripts/remote.sh ubuntu@1.2.3.4 setup
 #   scripts/remote.sh ubuntu@1.2.3.4 run python3 -m pytest tests -q
 #   scripts/remote.sh ubuntu@1.2.3.4 pull        # copy runs/ back
-#   scripts/remote.sh ubuntu@1.2.3.4 watch       # live episodes at http://localhost:8008
+#   scripts/remote.sh ubuntu@1.2.3.4 watch       # live episodes at http://localhost:8008 (--blind hides labels)
 set -euo pipefail
 host=$1; cmd=$2; shift 2
 here=$(cd "$(dirname "$0")/.." && pwd)
@@ -37,7 +37,7 @@ case $cmd in
   watch)
     sync
     echo "open http://localhost:8008"
-    $ssh_ -t -L 8008:localhost:8008 "$host" "cd knob-ladder && python3 scripts/watch.py --port 8008"
+    $ssh_ -t -L 8008:localhost:8008 "$host" "cd knob-ladder && python3 scripts/watch.py --port 8008 $*"
     ;;
   pull)
     rsync -az -e "$ssh_" "$host:knob-ladder/runs/" "$here/runs/"

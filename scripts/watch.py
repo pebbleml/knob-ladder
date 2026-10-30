@@ -111,12 +111,18 @@ def knob_key(k):
 def readout_str(ro):
     if not isinstance(ro, dict):
         return "-"
-    rank = ro.get("rank")
+    rank = "hidden" if BLIND else ro.get("rank")
     top = ro.get("top") or []
     return f"rank {rank if rank is not None else '-'}  top: {', '.join(str(x) for x in top)}"
 
 
+# --blind: hide what a knob carries (labels, steered tags, the board, discovery ranks), for confirmatory runs.
+BLIND = False
+
+
 def label_of(e):
+    if BLIND:
+        return "hidden"
     return e.get("label") if e.get("label") is not None else "?"
 
 
@@ -129,13 +135,15 @@ def event_text(e, t0=None):
     if t0 is not None and isinstance(e.get("t"), (int, float)):
         rel = f"+{e['t'] - t0:.1f}s "
     if typ == "board":
+        if BLIND:
+            return f"{rel}BOARD (hidden)"
         b = e.get("board") or {}
         items = sorted(b.items(), key=lambda kv: knob_key(kv[0]))
         return f"{rel}BOARD (passage_index={e.get('passage_index')}): " + ", ".join(f"{k}={v}" for k, v in items)
     if typ == "msg":
         role = str(e.get("role", "?")).upper()
         tag = ""
-        if e.get("steered"):
+        if e.get("steered") and not BLIND:
             tag = f" [STEERED knob {e.get('knob')} = {label_of(e)}]"
         elif e.get("knob") is not None:
             tag = f" [knob {e.get('knob')}]"
@@ -145,7 +153,7 @@ def event_text(e, t0=None):
         for r in e.get("rows") or []:
             rec = r.get("recall") or {}
             ro = r.get("readout") if isinstance(r.get("readout"), dict) else {}
-            lines.append(f"knob {r.get('knob')}  label={r.get('label')}  presses={r.get('presses')}")
+            lines.append(f"knob {r.get('knob')}  label={label_of(r)}  presses={r.get('presses')}")
             lines.append(f"    cached recall:    {rec.get('cached', '')}")
             lines.append(f"    observer recall:  {rec.get('observer', '')}")
             lines.append(f"    readout cached:   {readout_str(ro.get('cached'))}")
@@ -301,7 +309,7 @@ def render_now(root, tail=6):
            f"{len(live)} episodes &middot; last {tail} messages each</div><div class=grid>"]
     for name, meta, ep, events, s in live:
         board = next((e for e in events if e.get("type") == "board"), None)
-        b = (board or {}).get("board") or {}
+        b = {} if BLIND else (board or {}).get("board") or {}
         bline = " &middot; ".join(f"{esc(k)}={esc(b[k])}" for k in sorted(b, key=knob_key))
         t0 = s["first"]
         msgs = [render_msg(e, t0) for e in events if e.get("type") == "msg"][-tail:]
@@ -341,12 +349,12 @@ def render_index(root):
 
 def render_msg(e, t0):
     role = str(e.get("role", "?"))
-    cls = "steered" if e.get("steered") else (role if role in ("system", "user", "assistant", "tool") else "tool")
+    cls = "steered" if e.get("steered") and not BLIND else (role if role in ("system", "user", "assistant", "tool") else "tool")
     hd = esc(role)
     lv = f" @ level {esc(e.get('level'))}" if e.get("level") is not None else ""
     if e.get("knob") is not None:
         what = "after " if role != "tool" else ""
-        hd += (f" &middot; {'STEERED ' if e.get('steered') else ''}{what}knob {esc(e.get('knob'))}"
+        hd += (f" &middot; {'STEERED ' if e.get('steered') and not BLIND else ''}{what}knob {esc(e.get('knob'))}"
                f" = <b>{esc(label_of(e))}</b>{lv}")
     if t0 is not None and isinstance(e.get("t"), (int, float)):
         hd += f" <span class=dim>+{e['t'] - t0:.1f}s</span>"
@@ -367,7 +375,7 @@ def render_discovery(e):
         rec = r.get("recall") or {}
         ro = r.get("readout") if isinstance(r.get("readout"), dict) else {}
         out.append(
-            f"<tr><td>{esc(r.get('knob'))}</td><td>{esc(r.get('label'))}</td><td>{esc(r.get('presses'))}</td>"
+            f"<tr><td>{esc(r.get('knob'))}</td><td>{esc(label_of(r))}</td><td>{esc(r.get('presses'))}</td>"
             f"<td><pre>{esc(rec.get('cached', ''))}</pre></td><td><pre>{esc(rec.get('observer', ''))}</pre></td>"
             f"<td>{esc(readout_str(ro.get('cached')))}</td><td>{esc(readout_str(ro.get('observer')))}</td></tr>")
     out.append("</table>")
@@ -388,7 +396,7 @@ def render_episode(root, run, ep):
                   for n in (ep - 1, ep + 1) if n >= 0 and ep_path(d, n).exists())
     out = [f"<div><a href='/'>&larr; runs</a> &middot; <b>{esc(run)}</b> ep{ep:03d} &middot; {st} &middot; "
            f"{s['presses']} presses &middot; last message {esc(ago(s['last']))}{nav}</div>"]
-    if board:
+    if board and not BLIND:
         b = board.get("board") or {}
         keys = sorted(b, key=knob_key)
         out.append(f"<h2>Board <span class=dim>(passage_index {esc(board.get('passage_index'))})</span></h2>"
@@ -446,9 +454,12 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--runs", default="runs/live", help="live runs directory (default runs/live)")
     ap.add_argument("--port", type=int, default=8008)
+    ap.add_argument("--blind", action="store_true", help="hide knob labels, steered tags and discovery ranks")
     ap.add_argument("--once", nargs=2, metavar=("RUN_ID", "EP"), help="print one episode as text and exit")
     ap.add_argument("--follow", nargs=2, metavar=("RUN_ID", "EP"), help="tail one episode as text (exits on done)")
     a = ap.parse_args()
+    global BLIND
+    BLIND = a.blind
     for pair in (a.once, a.follow):
         if pair and not (SAFE.match(pair[0]) and pair[1].isdigit()):
             ap.error("RUN_ID must be a plain name and EP an integer")
