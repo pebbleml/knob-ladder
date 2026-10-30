@@ -36,7 +36,7 @@ from knobladder.episode import fixed_texts  # noqa: E402
 from knobladder.knobs import CONCEPTS, concept_vectors, lexical_screen, unit  # noqa: E402
 from knobladder.model import SteeredLM  # noqa: E402
 from knobladder.readout import QUESTION, first_tokens, ranks, readout_prompt  # noqa: E402
-from knobladder.text import NEUTRAL_PASSAGES, PASSAGES_VERSION  # noqa: E402
+from knobladder.text import NEUTRAL_PASSAGES, PASSAGES_VERSION, template_texts  # noqa: E402
 
 TOP_RANK = 5
 Z = 2.5
@@ -70,7 +70,7 @@ def main():
     ap.add_argument("--dtype", default="float32", choices=["float32", "bfloat16"])
     args = ap.parse_args()
 
-    lex = lexical_screen(NEUTRAL_PASSAGES + fixed_texts() + [QUESTION])
+    lex = lexical_screen(NEUTRAL_PASSAGES + fixed_texts() + template_texts() + [QUESTION])
     if lex:
         sys.exit(f"lexical screen failed: {lex}")
 

@@ -1,29 +1,113 @@
-"""Raw Qwen3 chat segments.
+"""Raw chat segments for Qwen3 and for Qwen3.5/3.8 (one format, `qwen3_5`).
 
 Conversations are built by appending these segments to a token list rather than
 re-rendering with the chat template, because the template rewrites earlier
 assistant turns (it drops their think blocks) and would shift steered positions.
-The format matches Qwen3's template with enable_thinking=False.
+User turns, tool responses and the non-thinking generation prompt are the same in both
+formats; the system block, the thinking generation prompt and tool calls differ (`Format`).
 """
 from __future__ import annotations
 
 import json
-from typing import Dict, List
+import re
+from dataclasses import dataclass
+from typing import Dict, List, Optional
 
 GEN = "<|im_start|>assistant\n<think>\n\n</think>\n\n"
-GEN_THINK = "<|im_start|>assistant\n"  # thinking on: the model opens its own <think> block
 END = "<|im_end|>\n"
+ASSISTANT = "<|im_start|>assistant\n"
+
+# Qwen3.5/3.8's chat template, verbatim: the tools block, and the line thinking mode adds per reasoning effort.
+_XML_TOOLS = (
+    "\n\nIf you choose to call a function ONLY reply in the following format with NO suffix:\n\n<tool_call>\n"
+    "<function=example_function_name>\n<parameter=example_parameter_1>\nvalue_1\n</parameter>\n"
+    "<parameter=example_parameter_2>\nThis is the value for the second parameter\nthat can span\nmultiple lines\n"
+    "</parameter>\n</function>\n</tool_call>\n\n<IMPORTANT>\nReminder:\n- Function calls MUST follow the specified "
+    "format: an inner <function=...></function> block must be nested within <tool_call></tool_call> XML tags\n"
+    "- Required parameters MUST be specified\n- You may provide optional reasoning for your function call in natural "
+    "language BEFORE the function call, but NOT after\n- If there is no function call available, answer the question "
+    "like normal with your current knowledge and do not tell the user about function calls\n</IMPORTANT>"
+)
+EFFORT = {
+    "xhigh": "Reasoning effort is set to xhigh. Please think carefully through the task, validate key assumptions, "
+             "consider plausible alternatives, and prioritize correctness, consistency, and clarity in the final answer.",
+    "medium": "",
+    "low": "Reasoning effort is set to low. Keep your thinking brief and focused, moving directly to the conclusion "
+           "without unnecessary elaboration.",
+}
+JSON_CALL = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.S)
+XML_CALL = re.compile(r"<tool_call>\s*<function=([^>\n]+)>(.*?)</function>\s*</tool_call>", re.S)
+XML_PARAM = re.compile(r"<parameter=([^>\n]+)>\n?(.*?)\n?</parameter>", re.S)
+
+
+@dataclass(frozen=True)
+class Format:
+    name: str  # "qwen3" or "qwen3_5"
+    gen_think: str  # the generation prompt with thinking on
+
+    @property
+    def think_open(self) -> str:
+        """What gen_think adds after the assistant header: the part of a turn the history drops with its thinking."""
+        return self.gen_think[len(ASSISTANT):]
+
+    def system(self, content: str, tools: List[Dict], effort: Optional[str] = None) -> str:
+        """The system turn with tools. `effort` (qwen3_5 with thinking only) adds the template's reasoning line."""
+        sigs = "\n".join(json.dumps(t) for t in tools)
+        if self.name == "qwen3":
+            assert effort is None, "Qwen3 has no reasoning effort"
+            return (
+                f"<|im_start|>system\n{content}\n\n# Tools\n\nYou may call one or more functions to assist with the user query.\n\n"
+                "You are provided with function signatures within <tools></tools> XML tags:\n"
+                f"<tools>\n{sigs}\n</tools>\n\n"
+                "For each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n"
+                '<tool_call>\n{"name": <function-name>, "arguments": <args-json-object>}\n</tool_call>' + END
+            )
+        line = EFFORT[effort] if effort else ""
+        head = line + "\n\n" if line else ""
+        return (f"<|im_start|>system\n{head}# Tools\n\nYou have access to the following functions:\n\n<tools>\n{sigs}\n</tools>"
+                + _XML_TOOLS + (f"\n\n{content.strip()}" if content.strip() else "") + END)
+
+    def tool_call(self, name: str, arguments: Dict, content: str = "") -> str:
+        """An assistant tool call as the model would write it after `content` (without the closing im_end)."""
+        if self.name == "qwen3":
+            return content + f"<tool_call>\n{json.dumps({'name': name, 'arguments': arguments})}\n</tool_call>"
+        params = "".join(f"<parameter={k}>\n{v if isinstance(v, str) else json.dumps(v)}\n</parameter>\n"
+                         for k, v in arguments.items())
+        sep = "\n\n" if content.strip() else ""
+        return f"{content}{sep}<tool_call>\n<function={name}>\n{params}</function>\n</tool_call>"
+
+
+QWEN3 = Format("qwen3", ASSISTANT)  # thinking on: the model opens its own <think> block
+QWEN3_5 = Format("qwen3_5", ASSISTANT + "<think>\n")  # the template opens it
+FORMATS = {"qwen3": QWEN3, "qwen3_5": QWEN3_5, "qwen3_5_text": QWEN3_5}
+GEN_THINK = QWEN3.gen_think
+
+
+def parse_call(text: str) -> Optional[Dict]:
+    """The first tool call in `text`, in either format, as {"name", "arguments"}; None if there is none or it is
+    malformed. XML parameter values stay strings (turned_knob and turned_level accept digit strings)."""
+    m = XML_CALL.search(text)
+    j = JSON_CALL.search(text)
+    if m and (not j or m.start() <= j.start()):
+        return {"name": m.group(1).strip(), "arguments": {k.strip(): v for k, v in XML_PARAM.findall(m.group(2))}}
+    if not j:
+        return None
+    try:
+        call = json.loads(j.group(1))
+    except json.JSONDecodeError:
+        return None
+    return call if isinstance(call, dict) else None
+
+
+def template_texts() -> List[str]:
+    """Fixed template text the model reads in every format, for the lexical screen (not authored by us, so not
+    held to the blind-framing word list)."""
+    return [f.system("", []) for f in (QWEN3, QWEN3_5)] + [l for l in EFFORT.values() if l]
 
 
 def system(content: str, tools: List[Dict]) -> str:
-    sigs = "\n".join(json.dumps(t) for t in tools)
-    return (
-        f"<|im_start|>system\n{content}\n\n# Tools\n\nYou may call one or more functions to assist with the user query.\n\n"
-        "You are provided with function signatures within <tools></tools> XML tags:\n"
-        f"<tools>\n{sigs}\n</tools>\n\n"
-        "For each function call, return a json object with function name and arguments within <tool_call></tool_call> XML tags:\n"
-        '<tool_call>\n{"name": <function-name>, "arguments": <args-json-object>}\n</tool_call>' + END
-    )
+    """Qwen3's system turn (kept for callers that predate Format)."""
+    return QWEN3.system(content, tools)
 
 
 def user(content: str) -> str:
@@ -31,8 +115,8 @@ def user(content: str) -> str:
 
 
 def tool_call(name: str, arguments: Dict) -> str:
-    """An assistant tool call as the model would write it (without the closing im_end)."""
-    return f"<tool_call>\n{json.dumps({'name': name, 'arguments': arguments})}\n</tool_call>"
+    """A Qwen3 assistant tool call (without the closing im_end)."""
+    return QWEN3.tool_call(name, arguments)
 
 
 def chat_prefix(content: str) -> str:

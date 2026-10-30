@@ -22,7 +22,13 @@ sync() {
 case $cmd in
   setup)
     sync
-    $ssh_ "$host" 'pip install -q "transformers==4.57.6" "numpy<2" "pillow>=10" accelerate scikit-learn pytest && python3 -c "import torch,transformers;print(torch.__version__,transformers.__version__,torch.cuda.get_device_name())"'
+    # transformers 5.20.2 has Qwen3.8 (qwen3_5); it needs python >= 3.10. flash-linear-attention is the fast
+    # Gated DeltaNet kernel (pure triton, no torch upgrade). causal-conv1d only ships as source, so its build is
+    # best-effort: without it the conv falls back to torch, exact but slower.
+    $ssh_ "$host" 'python3 -c "import sys; assert sys.version_info >= (3, 10), sys.version" &&
+      pip install -q "transformers==5.20.2" "flash-linear-attention==0.5.2" "numpy<2" "pillow>=10" accelerate scikit-learn pytest jinja2 &&
+      (timeout 1200 pip install -q --no-build-isolation "causal-conv1d==1.6.2.post1" || echo "causal-conv1d not built; torch fallback") &&
+      python3 -c "import torch,transformers,importlib.util as u;print(torch.__version__,transformers.__version__,torch.cuda.get_device_name(),{m:bool(u.find_spec(m)) for m in (\"fla\",\"causal_conv1d\")})"'
     ;;
   run)
     sync

@@ -11,6 +11,13 @@ Several sequences can run as rows of one `Batch`. A row's tokens need not fill c
 columns: columns it does not use are masked out and its position ids count only its own
 tokens, so each row computes what it would alone, and steering lands on each row's own
 absolute positions.
+
+Hybrid models (Qwen3.5/3.8: Gated DeltaNet layers between full-attention layers) keep a recurrent state
+per row instead of keys and values in their linear layers. A fresh prefill with left padding is exact
+for them (padded inputs are zeroed, so the state stays at its zero start), but padding fed after a row's
+cached tokens is not, and a recurrent state cannot be cut back. So a hybrid Batch only grows: rows
+are never truncated, compacted or forked, every new chunk is either one token per live row or a fresh
+prefill, and `branches` re-prefills its prefix for each group.
 """
 from __future__ import annotations
 
@@ -20,7 +27,9 @@ from typing import Dict, List, Optional, Sequence, Tuple
 
 import torch
 import transformers
-from transformers import AutoModelForCausalLM, AutoTokenizer, DynamicCache
+from transformers import AutoConfig, AutoTokenizer, DynamicCache
+
+from .text import FORMATS
 
 # Pinned Hugging Face revisions, so every run of a model reads the same weights and tokenizer.
 REVISIONS = {
@@ -28,6 +37,8 @@ REVISIONS = {
     "Qwen/Qwen3-4B": "1cfa9a7208912126459214e8b04321603b3df60c",
     "Qwen/Qwen3-8B": "b968826d9c46dd6066d109eabc6255188de91218",
     "Qwen/Qwen3-32B": "9216db5781bf21249d130ec9da846c4624c16137",
+    "Qwen/Qwen3.8-27B": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
+    "Qwen/Qwen3.5-0.8B": "2fc06364715b967f1860aea9cf38778875588b17",  # hybrid test model (no small Qwen3.8 exists)
 }
 
 
@@ -56,10 +67,12 @@ class Intervention:
 class Batch:
     """Rows sharing one KV cache. `ids[r]` are row r's tokens in the cache, in column order."""
 
-    def __init__(self, n: int):
+    def __init__(self, n: int, config=None):
+        """`config`: a hybrid model's text config, so the cache holds recurrent layers where it has them."""
         self.ids: List[List[int]] = [[] for _ in range(n)]
         self.scheds: List[List[Intervention]] = [[] for _ in range(n)]  # what those tokens were steered with
-        self.cache = DynamicCache()
+        self.hybrid = config is not None
+        self.cache = DynamicCache(config=config) if self.hybrid else DynamicCache()
         self.mask: Optional[torch.Tensor] = None  # (rows, columns), True where a row has a token
         self.holes = False  # some row skips a column; until then no mask is passed, as for one row
 
@@ -75,6 +88,7 @@ class Batch:
         frees the columns. The kept keys are unchanged, so this equals a fresh prefill of those n tokens."""
         if n == len(self.ids[r]):
             return
+        assert not self.hybrid, "a recurrent state cannot be cut back"
         cols = self.mask[r].nonzero().flatten()
         self.mask[r, cols[n:]] = False
         self.ids[r] = self.ids[r][:n]
@@ -85,6 +99,7 @@ class Batch:
         their rotary positions, so attention is unchanged."""
         if not self.holes:
             return
+        assert not self.hybrid, "a hybrid cache is never compacted"
         keep = self.mask.cpu()
         n = [len(r) for r in self.ids]
         assert keep.sum(1).tolist() == n, "batch mask out of step with its ids"
@@ -101,7 +116,7 @@ class Batch:
 
     def fork(self, n: int) -> "Batch":
         """n copies of a one-row batch."""
-        assert len(self.ids) == 1
+        assert len(self.ids) == 1 and not self.hybrid, "fork copies keys and values only"
         b = Batch(n)
         for i, layer in enumerate(self.cache.layers):
             b.cache.update(layer.keys.expand(n, -1, -1, -1), layer.values.expand(n, -1, -1, -1), i)
@@ -124,21 +139,26 @@ class SteeredLM:
         self.name = name
         self.revision = revision or REVISIONS.get(name)
         self.tok = AutoTokenizer.from_pretrained(name, revision=self.revision)
+        # The checkpoint's own class: Qwen3.5/3.8 ship as image-text models whose text model is model.language_model.
+        cls = getattr(transformers, AutoConfig.from_pretrained(name, revision=self.revision).architectures[0])
         if device is None and torch.cuda.device_count() > 1:
             # Too big for one card: split the layers over every visible GPU (run one process
             # per GPU group, e.g. CUDA_VISIBLE_DEVICES=0,1, to run several copies side by side).
-            self.model = AutoModelForCausalLM.from_pretrained(name, dtype=dtype, revision=self.revision,
-                                                              device_map="auto")
+            self.model = cls.from_pretrained(name, dtype=dtype, revision=self.revision, device_map="auto")
             self.device = str(self.model.get_input_embeddings().weight.device)
         else:
             self.device = device or default_device()
-            self.model = AutoModelForCausalLM.from_pretrained(name, dtype=dtype, revision=self.revision)
+            self.model = cls.from_pretrained(name, dtype=dtype, revision=self.revision)
             self.model.to(self.device)
         self.model.eval()
-        self.layers = self.model.model.layers
+        self.text = getattr(self.model.model, "language_model", self.model.model)  # embeddings, layers, final norm
+        self.config = self.text.config
+        self.fmt = FORMATS[self.config.model_type]
+        self.hybrid = "linear_attention" in (getattr(self.config, "layer_types", None) or ())
+        self.layers = self.text.layers
         self._layer_device = [next(layer.parameters()).device for layer in self.layers]
         self.n_layers = len(self.layers)
-        self.d_model = self.model.config.hidden_size
+        self.d_model = self.config.hidden_size
         self._schedule: Dict[int, List[Tuple[int, Intervention, torch.Tensor]]] = {}
         self._rows: List[Tuple[int, int, int]] = []
         self._capture_layers: set = set()
@@ -150,7 +170,8 @@ class SteeredLM:
         """What produced a run: weights, numerics, library versions and the code revision."""
         rev = Path(__file__).resolve().parents[1] / "REVISION"
         return {
-            "model": self.name, "revision": self.revision, "dtype": str(self.model.dtype),
+            "model": self.name, "revision": self.revision, "dtype": str(self.model.dtype), "format": self.fmt.name,
+            "hybrid": self.hybrid, "kernels": _kernels() if self.hybrid else None,
             "attn_implementation": getattr(self.model.config, "_attn_implementation", None),
             "device": [torch.cuda.get_device_name(i) for i in range(torch.cuda.device_count())]
             if torch.cuda.is_available() else self.device,
@@ -177,13 +198,16 @@ class SteeredLM:
     def _forward(self, ids: Sequence[int], offset: int, cache):
         self._rows = [(0, offset, len(ids))]
         x = torch.tensor([list(ids)], device=self.device)
-        out = self.model.model(input_ids=x, past_key_values=cache, use_cache=cache is not None)
+        out = self.text(input_ids=x, past_key_values=cache, use_cache=cache is not None)
         return out.last_hidden_state[0]
 
     def _extend(self, b: Batch, chunks: Sequence[Sequence[int]]) -> torch.Tensor:
         """Append chunks[r] to row r, right-aligned so the last column holds every non-empty row's newest
         token. Returns the last column's hidden states, (rows, d)."""
         width = max(map(len, chunks))
+        # Hybrid: padding after cached tokens would decay and shift a recurrent state, so a continued
+        # row takes exactly one token (or none, when it has finished and is never continued).
+        assert not self.hybrid or not any(b.ids) or width == 1, "a hybrid batch continues one token at a time"
         pad = self.tok.pad_token_id or 0
         x, pos, keep, rows = [], [], [], []
         for r, c in enumerate(chunks):
@@ -197,7 +221,7 @@ class SteeredLM:
         new = torch.tensor(keep, device=self.device)
         b.mask = new if b.mask is None else torch.cat([b.mask, new], 1)
         self._rows = rows
-        out = self.model.model(input_ids=torch.tensor(x, device=self.device),
+        out = self.text(input_ids=torch.tensor(x, device=self.device),
                                attention_mask=b.mask if b.holes else None,
                                position_ids=torch.tensor(pos, device=self.device),
                                past_key_values=b.cache, use_cache=True)
@@ -211,6 +235,9 @@ class SteeredLM:
             for iv in schedule:
                 v = iv.vector.to(device=self._layer_device[iv.layer], dtype=dtype)
                 self._schedule.setdefault(iv.layer, []).append((r, iv, v))
+
+    def new_batch(self, n: int) -> Batch:
+        return Batch(n, self.config if self.hybrid else None)
 
     # -- public API --------------------------------------------------------
     def encode(self, text: str) -> List[int]:
@@ -287,7 +314,8 @@ class SteeredLM:
         Returns the new tokens per row, and with `first_logits` also the first step's (rows, vocab) logits.
         """
         n = len(prompts)
-        b = batch or Batch(n)
+        b = batch or self.new_batch(n)
+        assert b.hybrid == self.hybrid
         assert len(b.ids) == len(schedules) == n
         chunks = []
         for p, s, done, old in zip(prompts, schedules, b.ids, b.scheds):
@@ -332,7 +360,16 @@ class SteeredLM:
         size: int = 8,
     ) -> List[Tuple[torch.Tensor, List[int]]]:
         """(first-step logits, greedy tokens) of prefix + tail for every tail, `size` tails at a time.
-        The prefix is prefilled once; steering is by absolute position, so this equals one prefill per branch."""
+        The prefix is prefilled once; steering is by absolute position, so this equals one prefill per branch.
+        A hybrid model prefills prefix + tail afresh for each group (its state cannot be forked mid-sequence)."""
+        if self.hybrid:
+            out = []
+            for g in range(0, len(tails), size):
+                group = tails[g:g + size]
+                first, new = self.generate_batch([list(prefix) + list(t) for t in group], [schedule] * len(group),
+                                                 max_new_tokens, stop_ids, temperature=0, first_logits=True)
+                out += list(zip(first, new))
+            return out
         base = Batch(1)
         try:
             self._set_schedule([schedule])
@@ -348,6 +385,12 @@ class SteeredLM:
                                              batch=base.fork(len(group)), first_logits=True)
             out += list(zip(first, new))
         return out
+
+
+def _kernels() -> Dict:
+    """Which fast paths the Gated DeltaNet layers can use (the torch fallbacks are exact but slow)."""
+    import importlib.util
+    return {m: importlib.util.find_spec(m) is not None for m in ("fla", "causal_conv1d")}
 
 
 def sample(logits: torch.Tensor, temperature: float, top_p: float, top_k: int, gen) -> int:

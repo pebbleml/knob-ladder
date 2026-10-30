@@ -31,14 +31,15 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from knobladder.episode import (  # noqa: E402
-    CONTROLS, discovery, fixed_texts, hyperparams, preference_counts, press_counts, run_episodes, shuffled_board,
+    CONTROLS, THINKING, discovery, fixed_texts, hyperparams, preference_counts, press_counts, run_episodes,
+    shuffled_board,
 )
 from knobladder.knobs import (  # noqa: E402
     CONCEPTS, concept_vectors, lexical_screen, load_screen, random_direction, residual_scale, resolve_run,
 )
 from knobladder.model import SteeredLM  # noqa: E402
 from knobladder.readout import first_tokens  # noqa: E402
-from knobladder.text import EPISODE_PASSAGES, PASSAGES_VERSION  # noqa: E402
+from knobladder.text import EFFORT, EPISODE_PASSAGES, PASSAGES_VERSION, template_texts  # noqa: E402
 
 
 def main():
@@ -57,9 +58,13 @@ def main():
                     help="with --window observation and --thinking: also steer the reply's first n tokens")
     ap.add_argument("--stop-file", default=str(ROOT / "runs" / "STOP"),
                     help="once this file exists, each episode gives its final hypothesis and stops (budget)")
-    ap.add_argument("--thinking", action="store_true", help="Qwen3 thinking mode for episode turns (not discovery)")
+    ap.add_argument("--thinking", action="store_true", help="thinking mode for episode turns (not discovery)")
     ap.add_argument("--keep-thinking", action="store_true",
-                    help="with --thinking: keep past think blocks in the history (Qwen3's template drops them)")
+                    help="with --thinking: keep past think blocks in the history (Qwen3's template drops them; "
+                         "Qwen3.8's keeps them by default)")
+    ap.add_argument("--think-tokens", type=int, help="with --thinking: tokens per turn before the think block is cut "
+                                                     "(default per model: Qwen3 1536, Qwen3.5/3.8 4096)")
+    ap.add_argument("--effort", choices=sorted(EFFORT), help="with --thinking on Qwen3.8: reasoning effort (default xhigh)")
     ap.add_argument("--episodes", type=int, default=2)
     ap.add_argument("--seed", type=int, default=0)
     ap.add_argument("--shard", default="0/1", help="i/n: run episodes e with e %% n == i (scripts/shards.sh)")
@@ -72,7 +77,7 @@ def main():
     ap.add_argument("--dtype", default="float32", choices=["float32", "bfloat16"])
     args = ap.parse_args()
 
-    lex = lexical_screen(EPISODE_PASSAGES + fixed_texts(args.knobs + 2))
+    lex = lexical_screen(EPISODE_PASSAGES + fixed_texts(args.knobs + 2) + template_texts())
     if lex:
         sys.exit(f"lexical screen failed: {lex}")
     screen = load_screen(args.screen, args.model)
@@ -93,6 +98,14 @@ def main():
     assert screen["passages_version"] == PASSAGES_VERSION, screen["passages_version"]
 
     lm = SteeredLM(args.model, dtype=getattr(torch, args.dtype))
+    if args.reuse_cache and lm.hybrid:
+        sys.exit("--reuse-cache needs keys and values in every layer; this model has recurrent layers")
+    if args.think_tokens:
+        THINKING[lm.fmt.name]["max_new_tokens"] = args.think_tokens
+    if args.effort:
+        assert "effort" in THINKING[lm.fmt.name], f"{args.model} has no reasoning effort"
+        THINKING[lm.fmt.name]["effort"] = args.effort
+    hp = hyperparams(args.thinking, lm.fmt.name)
     layer = int(args.layer * lm.n_layers)
     knob_words = screen["knobs"]
     vectors = concept_vectors(lm, CONCEPTS, layer)
@@ -124,7 +137,7 @@ def main():
     live.mkdir(parents=True, exist_ok=True)
     (live / "meta.json").write_text(json.dumps({
         "run": run_id, "model": args.model, "layer": layer, "alpha": args.alpha, "dose": dose, "window": args.window,
-        "steer_tokens": args.steer_tokens, "steer_reply": args.steer_reply, "thinking": args.thinking, "keep_thinking": args.keep_thinking, "episodes": args.episodes, "shard": args.shard, "batch": args.batch, "reuse_cache": args.reuse_cache,
+        "steer_tokens": args.steer_tokens, "steer_reply": args.steer_reply, "thinking": args.thinking, "keep_thinking": args.keep_thinking, "hyperparams": hp, "episodes": args.episodes, "shard": args.shard, "batch": args.batch, "reuse_cache": args.reuse_cache,
         "started": time.time()}))
 
     def start(ep):
@@ -169,7 +182,7 @@ def main():
                 note("done", seconds=time.time() - t0)  # since the batch started
                 e["log"].close()
                 row = {
-                    "episode": ep, "seed": seed, "model": args.model, "hyperparams": hyperparams(args.thinking), "keep_thinking": args.keep_thinking,
+                    "episode": ep, "seed": seed, "model": args.model, "hyperparams": hp, "keep_thinking": args.keep_thinking,
                     "batch": args.batch, "reuse_cache": args.reuse_cache,
                     "provenance": prov, "readout_candidates": knob_words, "raw_norm_ratio": raw_norm,
                     "passages_version": PASSAGES_VERSION, "passage_index": e["passage_index"],

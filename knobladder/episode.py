@@ -8,7 +8,8 @@ transcript carries nothing about the knobs; with window="observation" it continu
 observation the model writes next, so its notes can reflect the state (and so does the text the
 observer reads). The `observer` re-runs the same tokens with no steering. At the end the model
 is asked for one hypothesis about the knobs as a whole. With thinking, each turn thinks first and,
-as Qwen3's chat template does, the history keeps only its reply (unless keep_thinking).
+as Qwen3's and Qwen3.5's chat templates do, the history keeps only its reply (unless keep_thinking;
+Qwen3.8's template keeps past thinking by default, but the design drops it for every model).
 
 Discovery never shows the model a list of concepts. It asks what each knob does, to be
 answered with one word and then one sentence: the first-token logits of the word are ranked
@@ -20,7 +21,6 @@ from __future__ import annotations
 import json
 import os
 import random
-import re
 from dataclasses import dataclass, field
 from typing import Callable, Dict, List, Optional, Set, Tuple
 
@@ -29,7 +29,7 @@ import torch
 from .knobs import lexical_hits, unit
 from .model import Batch, Intervention, SteeredLM
 from .readout import ranks
-from .text import END, GEN, GEN_THINK, system, user
+from .text import END, GEN, parse_call, user  # noqa: F401 (parse_call is re-exported)
 
 # Frozen hyperparameters (Qwen3 non-thinking defaults). Every output row records HYPERPARAMS.
 TEMPERATURE = 0.7
@@ -38,22 +38,27 @@ TOP_K = 20
 MAX_NEW_TOKENS = 256  # per generation
 MAX_TURNS = 40  # decision turns per episode
 RECALL_TOKENS = 60  # the discovery answer, greedy
-# With --thinking: Qwen3's thinking-mode defaults, and room for the think block. Discovery stays non-thinking.
-THINKING = {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "thinking": True, "max_new_tokens": 1536}
+# With --thinking, per chat format: the model card's thinking-mode sampling, and room for the think block.
+# Qwen3.8 also takes a reasoning effort (its template's default is xhigh). Discovery stays non-thinking.
+THINKING = {
+    "qwen3": {"temperature": 0.6, "top_p": 0.95, "top_k": 20, "thinking": True, "max_new_tokens": 1536},
+    "qwen3_5": {"temperature": 1.0, "top_p": 0.95, "top_k": 20, "thinking": True, "max_new_tokens": 4096,
+                "effort": "xhigh"},
+}
 # A think block cut off by the limit is closed with Qwen3's thinking-budget line and sampled once more, so
 # every turn ends in a reply and no think block is left open.
 THINK_CUT = ("\n\nConsidering the limited time by the user, I have to give the solution based on the thinking "
              "directly now.\n</think>\n\n")
 
 
-def hyperparams(thinking: bool = False) -> Dict:
-    """Read at call time, so tests can patch the module constants."""
+def hyperparams(thinking: bool = False, fmt: str = "qwen3") -> Dict:
+    """Read at call time, so tests can patch the module constants. `fmt` is the chat format's name."""
     hp = {
         "temperature": TEMPERATURE, "top_p": TOP_P, "top_k": TOP_K, "thinking": False,
         "max_new_tokens": MAX_NEW_TOKENS, "max_turns": MAX_TURNS,
         "recall_tokens": RECALL_TOKENS, "recall_temperature": 0.0,
     }
-    return {**hp, **THINKING} if thinking else hp
+    return {**hp, **THINKING[fmt]} if thinking else hp
 
 
 HYPERPARAMS = hyperparams()
@@ -105,7 +110,6 @@ CONTROLS = ("random", "sham")
 
 NUMBER_WORDS = ["zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine",
                 "ten", "eleven", "twelve"]
-TOOL_CALL = re.compile(r"<tool_call>\s*(\{.*?\})\s*</tool_call>", re.S)
 
 
 def system_text(numbers: List[int]) -> str:
@@ -190,17 +194,6 @@ class Transcript:
         return start, len(self.ids)
 
 
-def parse_call(text: str) -> Optional[Dict]:
-    m = TOOL_CALL.search(text)
-    if not m:
-        return None
-    try:
-        call = json.loads(m.group(1))
-    except json.JSONDecodeError:
-        return None
-    return call if isinstance(call, dict) else None
-
-
 def turned_knob(call: Optional[Dict], board: Board) -> Optional[int]:
     """The knob number of a valid turn call, else None."""
     if not call or call.get("name") != "turn":
@@ -279,7 +272,7 @@ def run_episodes(
     when it ends, so each is the episode run_episode would run (up to batched numerics).
 
     By default every round re-prefills each whole transcript, as run_episode always has. With
-    `reuse_cache` the batch keeps its KV cache across rounds and prefills only the new tokens. That is
+    `reuse_cache` (not for hybrid models) the batch keeps its KV cache across rounds and prefills only the new tokens. That is
     the same computation: a transcript only grows past its cached prefix (a dropped think block cuts the
     cache back to where the turn began), and a window is added to the schedule before its passage is
     first fed, so no cached token would be steered differently by a re-prefill (generate_batch asserts both).
@@ -289,10 +282,11 @@ def run_episodes(
 
     Once `stop_file` exists, each episode is asked for its final hypothesis instead of its next decision,
     and records a "stopped" event (a run cut short by its budget, not by the model)."""
+    assert not (reuse_cache and lm.hybrid), "a hybrid model's recurrent state cannot drop a think block"
     emits = emits or [None] * len(boards)
     eps = [_episode(lm, *a, thinking=thinking, keep_thinking=keep_thinking, stop_file=stop_file)
            for a in zip(boards, passages, seeds, emits)]
-    hp = hyperparams(thinking)
+    hp = hyperparams(thinking, lm.fmt.name)
     trs: List[Optional[Transcript]] = [None] * len(eps)
     pending: Dict[int, Tuple[Transcript, int]] = {}
 
@@ -342,11 +336,14 @@ def _shared(a: List[int], b: List[int]) -> int:
 
 
 def _drop_thinking(lm: SteeredLM, tr: Transcript, start: int, reply: Optional[Intervention] = None):
-    """Rewrite the closed turn at tr.ids[start:] as its reply alone, as Qwen3's chat template renders a past turn.
+    """Rewrite the closed turn at tr.ids[start:] as its reply alone, as Qwen3's chat template renders a past turn
+    (`<|im_start|>assistant\n` + reply). The generation prompt's own `<think>\n` (Qwen3.5/3.8) goes with it.
     A window over the reply's first tokens moves with it, less the newlines the rewrite strips."""
     text = lm.tok.decode(tr.ids[start:])
     if "</think>" in text:
-        old = len(tr.ids)
+        opened = _opened(lm)
+        assert tr.ids[start - len(opened):start] == opened, "the turn does not follow its generation prompt"
+        old, start = len(tr.ids), start - len(opened)
         tr.ids[start:] = lm.encode(text.split("</think>", 1)[1].lstrip("\n"))
         if reply is not None and reply.start is not None:
             stripped = (old - reply.start) - (len(tr.ids) - start)
@@ -354,24 +351,30 @@ def _drop_thinking(lm: SteeredLM, tr: Transcript, start: int, reply: Optional[In
             reply.start, reply.end = start, start + n
 
 
+def _opened(lm: SteeredLM) -> List[int]:
+    """The tokens the thinking generation prompt writes after the assistant header (none for Qwen3)."""
+    return lm.encode(lm.fmt.think_open) if lm.fmt.think_open else []
+
+
 def _sample(lm: SteeredLM, tr: Transcript, seed: int, stops: List[int], thinking: bool, keep_thinking: bool = True,
             reply: Optional[Intervention] = None):
     """One assistant turn, as a sub-coroutine of _episode: returns (text, ended on a tool call, forged, fed,
     cut), where fed is the position of the last sampled token, never fed before the turn is closed. Text is
-    the whole turn, thinking included, even when the history keeps only the reply.
+    the whole turn, thinking included (from its <think>, even where the generation prompt opened it), even when
+    the history keeps only the reply.
 
     `reply`, an unplaced window in tr.schedule with after=</think>, is placed on the reply's first tokens (after
     THINK_CUT when the think block is cut), ends where the reply does, and is None-started if never placed."""
     start = len(tr.ids)
     out = yield tr, seed
     cut = thinking and lm.token_id("</think>") not in out
-    head = ""
+    head = lm.fmt.think_open if thinking else ""
     if cut:
         if out and out[-1] in stops:
             out = out[:-1]  # a turn that stops inside its think block is closed like one the limit cut off
         tr.append_ids(out)
         tr.append(lm, THINK_CUT)
-        head = lm.tok.decode(out) + THINK_CUT
+        head += lm.tok.decode(out) + THINK_CUT
         if reply is not None:
             reply.place(len(tr.ids))
         out = yield tr, seed + 500
@@ -392,15 +395,17 @@ def _episode(lm: SteeredLM, board: Board, passage: str, seed: int, emit: Optiona
     tr = Transcript()
     drop = thinking and not keep_thinking
     sys_text = system_text(board.numbers())
-    tr.append(lm, system(sys_text, TOOLS))
+    hp = hyperparams(thinking, lm.fmt.name)
+    tr.append(lm, lm.fmt.system(sys_text, TOOLS, hp.get("effort")))
     emit("system", sys_text)
     stops = _stops(lm)
-    gen = GEN_THINK if thinking else GEN
+    gen = lm.fmt.gen_think if thinking else GEN
+    opened = len(_opened(lm)) if thinking else 0  # template tokens at the start of each turn, dropped with its thinking
     passage_ids = lm.encode(passage)  # identical tokens on every press
     prompt, calls = START, 0
     # Room left for one more press (decision, passage, observation) and the final answer, or the session ends.
-    budget = hyperparams(thinking)["max_new_tokens"] * (2 if thinking else 1)
-    limit = lm.model.config.max_position_embeddings - 3 * budget - len(passage_ids) - 256
+    budget = hp["max_new_tokens"] * (2 if thinking else 1)
+    limit = lm.config.max_position_embeddings - 3 * budget - len(passage_ids) - 256
     for turn in range(MAX_TURNS):
         if stop_file and os.path.exists(stop_file):
             tr.events.append({"turn": turn, "kind": "stopped", "tokens": len(tr.ids)})
@@ -456,7 +461,7 @@ def _episode(lm: SteeredLM, board: Board, passage: str, seed: int, emit: Optiona
         # a think block shorter than the thinking window: its reply's first tokens were steered twice
         overlap = riv is not None and riv.placed is not None and riv.placed < iv.end
         if drop:
-            iv.end = min(iv.end, turn_start)  # those tokens were thinking, now gone; the reply is unsteered
+            iv.end = min(iv.end, turn_start - opened)  # those tokens were thinking, now gone; the reply is unsteered
         calls += 1
         emit("assistant", obs, knob=knob, label=label, level=level, forged=obs_forged,
              steered=board.window == "observation", observation=True, think_cut=obs_cut,

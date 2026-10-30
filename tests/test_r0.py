@@ -13,7 +13,7 @@ from knobladder.episode import (
 from knobladder.knobs import ASSOCIATES, CONCEPTS, lexical_hits, lexical_screen, random_direction
 from knobladder.model import Intervention, SteeredLM
 from knobladder.readout import QUESTION, first_tokens
-from knobladder.text import CALIB_PASSAGES, EPISODE_PASSAGES, GEN, NEUTRAL_PASSAGES, system, user
+from knobladder.text import CALIB_PASSAGES, EPISODE_PASSAGES, GEN, NEUTRAL_PASSAGES, template_texts, user
 
 MODEL = os.environ.get("KNOB_TEST_MODEL", "Qwen/Qwen3-0.6B")
 DTYPE = getattr(torch, os.environ.get("KNOB_TEST_DTYPE", "float32"))
@@ -21,7 +21,7 @@ DTYPE = getattr(torch, os.environ.get("KNOB_TEST_DTYPE", "float32"))
 
 # -- text only -------------------------------------------------------------
 def test_fixed_text_and_passages_contain_no_concept_or_associate():
-    assert lexical_screen(NEUTRAL_PASSAGES + fixed_texts() + [QUESTION]) == []
+    assert lexical_screen(NEUTRAL_PASSAGES + fixed_texts() + template_texts() + [QUESTION]) == []
 
 
 def test_lexical_screen_catches_inflections_and_associates():
@@ -102,8 +102,8 @@ def test_empty_schedule_leaves_cached_equal_to_observer(lm):
     board = board_for(lm)
     sham = next(k for k, kb in board.knobs.items() if kb.label == "sham")
     tr = Transcript()
-    tr.append(lm, system(system_text(board.numbers()), episode.TOOLS) + user("Begin.") + GEN)
-    tr.append(lm, '<tool_call>\n{"name": "turn", "arguments": {"knob": %d}}\n</tool_call><|im_end|>\n' % sham)
+    tr.append(lm, lm.fmt.system(system_text(board.numbers()), episode.TOOLS) + user("Begin.") + GEN)
+    tr.append(lm, lm.fmt.tool_call("turn", {"knob": sham, "level": 10}) + "<|im_end|>\n")
     window = append_passage(lm, tr, TURNED.format(k=sham, level=10), lm.encode(EPISODE_PASSAGES[0]))
     tr.append(lm, user(episode.OBSERVE) + GEN + "It read the same as before.<|im_end|>\n")
     for schedule in ([], [Intervention(board.layer, board.vector(sham), *window)]):

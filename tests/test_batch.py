@@ -4,6 +4,7 @@ where tokens must match exactly)."""
 import os
 import random
 import re
+from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
@@ -18,7 +19,7 @@ from knobladder.episode import (
 from knobladder.knobs import CONCEPTS, random_direction
 from knobladder.model import Batch, Intervention, SteeredLM, sample, sample_rows
 from knobladder.readout import first_tokens
-from knobladder.text import EPISODE_PASSAGES, GEN, GEN_THINK, chat_prefix, system, user
+from knobladder.text import ASSISTANT, EPISODE_PASSAGES, GEN, QWEN3, QWEN3_5, chat_prefix, user
 
 MODEL = os.environ.get("KNOB_TEST_MODEL", "Qwen/Qwen3-0.6B")
 DTYPE = getattr(torch, os.environ.get("KNOB_TEST_DTYPE", "float32"))
@@ -141,9 +142,12 @@ class FakeLM:
     """Characters as tokens and a scripted policy that depends only on (episode seed, call), like a
     sampler seeded per call. Enough to check run_episodes' bookkeeping without a model."""
 
-    def __init__(self):
+    def __init__(self, fmt=QWEN3):
         self.tok = SimpleNamespace(decode=self.decode, eos_token_id=BASE + 1)
-        self.model = SimpleNamespace(config=SimpleNamespace(max_position_embeddings=10 ** 9))
+        self.config = SimpleNamespace(max_position_embeddings=10 ** 9)
+        self.model = SimpleNamespace(config=self.config)
+        self.fmt, self.hybrid = fmt, False
+        self.open = "" if fmt.think_open else "<think>\n"  # what the model writes to open its think block
         self.sizes = []
 
     def encode(self, text):
@@ -167,9 +171,8 @@ class FakeLM:
         if ep == 1 and call == 2:
             return "Let me think.<|im_end|>"  # no call
         if call >= 2 + 3 * ep:
-            return '<tool_call>\n{"name": "end_session", "arguments": {}}\n</tool_call>'
-        return '<tool_call>\n{"name": "turn", "arguments": {"knob": %d, "level": %d}}\n</tool_call>' % (
-            (ep + call) % 7 + 1, (ep + call) % 11)
+            return self.fmt.tool_call("end_session", {})
+        return self.fmt.tool_call("turn", {"knob": (ep + call) % 7 + 1, "level": (ep + call) % 11})
 
     def generate_batch(self, prompts, schedules, max_new_tokens, stop_ids, temperature, top_p, top_k, seeds,
                        batch=None):
@@ -190,21 +193,25 @@ def fake_boards(n):
     return [shuffled_board(dirs, 5, 1, 2.0, random.Random(i), random_dir=random_direction(8, 99 + i)) for i in range(n)]
 
 
+FMTS = pytest.mark.parametrize("fmt", [QWEN3, QWEN3_5], ids=lambda f: f.name)
+
+
+@FMTS
 @pytest.mark.parametrize("window", ["passage", "observation"])
 @pytest.mark.parametrize("reuse_cache", [False, True])
-def test_run_episodes_equals_each_episode_run_alone(reuse_cache, window):
+def test_run_episodes_equals_each_episode_run_alone(reuse_cache, window, fmt):
     boards, seeds = fake_boards(3), [0, 1, 2]
     for b in boards:
         b.window = window
     passages = [EPISODE_PASSAGES[i] for i in range(3)]
     logs = [[] for _ in boards]
     emits = [lambda role, text, _log=log, **kw: _log.append((role, text, kw)) for log in logs]
-    fake = FakeLM()
+    fake = FakeLM(fmt)
     together = run_episodes(fake, boards, passages, seeds, emits, reuse_cache=reuse_cache)
     assert fake.sizes[0] == 3 and fake.sizes[-1] == 1 and fake.sizes == sorted(fake.sizes, reverse=True)
     for i, tr in enumerate(together):
         solo_log = []
-        solo = run_episode(FakeLM(), boards[i], passages[i], seeds[i],
+        solo = run_episode(FakeLM(fmt), boards[i], passages[i], seeds[i],
                            lambda role, text, **kw: solo_log.append((role, text, kw)))
         assert tr.ids == solo.ids and tr.events == solo.events and logs[i] == solo_log
         assert [(iv.start, iv.end) for iv in tr.schedule] == [(iv.start, iv.end) for iv in solo.schedule]
@@ -230,28 +237,29 @@ class ThinkingFake(FakeLM):
         if tail.endswith(THINK_CUT):
             return "It read the same.<|im_end|>" if last.startswith(OBSERVE) else super().reply(prompt, seed - 500)
         if last.startswith(OBSERVE):
-            return "<think>\nhoney honey honey honey"  # no </think>, no stop: cut off
+            return self.open + "honey honey honey honey"  # no </think>, no stop: cut off
         if seed == 1000:
-            return '<think>\nKnob 2.\n<tool_call>\n{"name": "turn", "arguments": {"knob": 2, "level": 3}}\n</tool_call>'
-        return "<think>\nok\n</think>\n\n" + super().reply(prompt, seed)
+            return self.open + "Knob 2.\n" + self.fmt.tool_call("turn", {"knob": 2, "level": 3})
+        return self.open + "ok\n</think>\n\n" + super().reply(prompt, seed)
 
 
+@FMTS
 @pytest.mark.parametrize("keep_thinking", [True, False])
 @pytest.mark.parametrize("reuse_cache", [False, True])
-def test_thinking_cut_is_closed_and_steering_stops_after_n_tokens(reuse_cache, keep_thinking):
+def test_thinking_cut_is_closed_and_steering_stops_after_n_tokens(reuse_cache, keep_thinking, fmt):
     boards, seeds = fake_boards(3), [0, 1, 2]
     for b in boards:
         b.window, b.steer_tokens = "observation", 5
     passages = [EPISODE_PASSAGES[i] for i in range(3)]
-    fake = ThinkingFake()
+    fake = ThinkingFake(fmt)
     logs = [[] for _ in boards]
     emits = [lambda role, text, _log=log, **kw: _log.append((role, text, kw)) for log in logs]
     together = run_episodes(fake, boards, passages, seeds, emits, reuse_cache=reuse_cache, thinking=True,
                             keep_thinking=keep_thinking)
-    first = fake.encode("<think>\nhoney honey honey honey")[:5]
-    gen = fake.encode(user(OBSERVE) + GEN_THINK)
+    first = fake.encode(fake.open + "honey honey honey honey")[:5]
+    gen = fake.encode(user(OBSERVE) + ASSISTANT)  # with the think block dropped, so is the <think> a template wrote
     for i, tr in enumerate(together):
-        solo = run_episodes(ThinkingFake(), [boards[i]], [passages[i]], [seeds[i]], thinking=True,
+        solo = run_episodes(ThinkingFake(fmt), [boards[i]], [passages[i]], [seeds[i]], thinking=True,
                             keep_thinking=keep_thinking)[0]
         assert tr.ids == solo.ids and tr.events == solo.events
         presses = [e for e in tr.events if e["kind"] == "press"]
@@ -267,8 +275,9 @@ def test_thinking_cut_is_closed_and_steering_stops_after_n_tokens(reuse_cache, k
                 assert tr.ids[iv.end - len(gen):iv.end] == gen  # steered up to the reply, which is not
             assert "<think>" not in text and "</think>" not in text
             assert text.count("It read the same.<|im_end|>") == len(presses)
-        # the live log keeps every turn whole, thinking included
+        # the live log keeps every turn whole, thinking included, from its <think>
         assert sum("honey" in t for r, t, _ in logs[i] if r == "assistant") == len(presses)
+        assert all(t.startswith("<think>\n") for r, t, _ in logs[i] if r == "assistant")
     # a call written inside an unclosed think block is closed like a cut, and the reply then makes the call
     ep1 = together[1].events
     assert ep1[0]["kind"] == "press" and (ep1[0]["knob"], ep1[0]["level"]) == (2, 1)
@@ -281,22 +290,23 @@ class ReplyFake(ThinkingFake):
     def reply(self, prompt, seed):
         last = self.decode(prompt[-400:]).rsplit("<|im_start|>user\n", 1)[-1]
         if last.startswith(OBSERVE) and seed // 1000 != 0 and not self.decode(prompt[-400:]).endswith(THINK_CUT):
-            return "<think>\nhoney\n</think>\n\nIt read the same.<|im_end|>"
+            return self.open + "honey\n</think>\n\nIt read the same.<|im_end|>"
         return super().reply(prompt, seed)
 
 
+@FMTS
 @pytest.mark.parametrize("keep_thinking", [True, False])
 @pytest.mark.parametrize("reuse_cache", [False, True])
-def test_reply_start_is_steered_and_moves_with_the_reply(reuse_cache, keep_thinking):
+def test_reply_start_is_steered_and_moves_with_the_reply(reuse_cache, keep_thinking, fmt):
     boards, seeds = fake_boards(3), [0, 1, 2]
     for b in boards:
         b.window, b.steer_tokens, b.steer_reply = "observation", 5, 4
     passages = [EPISODE_PASSAGES[i] for i in range(3)]
-    together = run_episodes(ReplyFake(), boards, passages, seeds, reuse_cache=reuse_cache, thinking=True,
+    together = run_episodes(ReplyFake(fmt), boards, passages, seeds, reuse_cache=reuse_cache, thinking=True,
                             keep_thinking=keep_thinking)
-    fake = ReplyFake()
+    fake = ReplyFake(fmt)
     for i, tr in enumerate(together):
-        solo = run_episodes(ReplyFake(), [boards[i]], [passages[i]], [seeds[i]], thinking=True,
+        solo = run_episodes(ReplyFake(fmt), [boards[i]], [passages[i]], [seeds[i]], thinking=True,
                             keep_thinking=keep_thinking)[0]
         assert tr.ids == solo.ids and tr.events == solo.events
         presses = [e for e in tr.events if e["kind"] == "press"]
@@ -326,7 +336,7 @@ def test_episode_ends_before_the_context_is_full():
     boards, passage = fake_boards(3), EPISODE_PASSAGES[0]
     fake = FakeLM()
     limit = 2500  # tokens of transcript after which no new turn starts
-    fake.model.config.max_position_embeddings = limit + 3 * MAX_NEW_TOKENS + len(fake.encode(passage)) + 256
+    fake.config.max_position_embeddings = limit + 3 * MAX_NEW_TOKENS + len(fake.encode(passage)) + 256
     trs = run_episodes(fake, boards, [passage] * 3, [0, 1, 2])
     kinds = [[e["kind"] for e in tr.events] for tr in trs]
     assert any(k[-2:] == ["context_full", "explanation"] for k in kinds)
@@ -334,6 +344,69 @@ def test_episode_ends_before_the_context_is_full():
         full = [e for e in tr.events if e["kind"] == "context_full"]
         assert all(e["tokens"] > limit for e in full)
         assert all(e["window"][0] <= limit + 400 for e in tr.events if e["kind"] == "press")
+
+class ScriptFake(FakeLM):
+    """Qwen3.8 thinking turns: think, then a short reply; two presses, then end_session. Records every prompt."""
+
+    def __init__(self, fmt=QWEN3_5):
+        super().__init__(fmt)
+        self.prompts = []
+
+    def reply(self, prompt, seed):
+        self.prompts.append(list(prompt))
+        last = self.decode(prompt[-400:]).rsplit("<|im_start|>user\n", 1)[-1]
+        call = seed % 1000
+        if last.startswith(OBSERVE):
+            return self.open + f"thought {call}\n</think>\n\nIt read the same.<|im_end|>"
+        if last.startswith(episode.EXPLAIN):
+            return self.open + "last\n</think>\n\nA set of knobs.<|im_end|>"
+        if call >= 4:
+            return self.open + "done\n</think>\n\n" + self.fmt.tool_call("end_session", {}, "Done.")
+        return self.open + f"plan {call}\n</think>\n\n" + self.fmt.tool_call("turn", {"knob": 2 + call, "level": 5},
+                                                                               f"Trying knob {2 + call}.")
+
+
+def render_template(path, messages, tools, **kw):
+    """The chat template rendered as transformers renders it (sandboxed jinja, trim/lstrip blocks, its tojson)."""
+    import json as _json
+    from jinja2.sandbox import ImmutableSandboxedEnvironment
+
+    def raise_exception(msg):
+        raise ValueError(msg)
+
+    env = ImmutableSandboxedEnvironment(trim_blocks=True, lstrip_blocks=True)
+    env.filters["tojson"] = lambda x, indent=None, separators=None, sort_keys=False, ensure_ascii=False: _json.dumps(
+        x, ensure_ascii=ensure_ascii, indent=indent, separators=separators, sort_keys=sort_keys)
+    env.globals["raise_exception"] = raise_exception
+    return env.from_string(Path(path).read_text()).render(messages=messages, tools=tools, **kw)
+
+
+@pytest.mark.parametrize("effort", ["xhigh", "medium", "low"])
+def test_qwen3_8_prompts_match_its_chat_template(effort, monkeypatch):
+    """What the model reads before its final answer is what Qwen3.8's template renders for the same
+    conversation with preserve_thinking=False (past think blocks dropped) and the same reasoning effort."""
+    monkeypatch.setattr(episode, "THINKING", {**episode.THINKING, "qwen3_5": {**episode.THINKING["qwen3_5"], "effort": effort}})
+    board, passage = fake_boards(1)[0], EPISODE_PASSAGES[0]
+    fake = ScriptFake()
+    run_episodes(fake, [board], [passage], [0], thinking=True)
+    def call(k):
+        return [{"type": "function", "function": {"name": "turn", "arguments": {"knob": k, "level": 5}}}]
+    messages = [{"role": "system", "content": system_text(board.numbers())}, {"role": "user", "content": episode.START}]
+    for c, k in ((0, 2), (2, 4)):  # decision calls 0 and 2 press knobs 2 and 4; calls 1 and 3 observe
+        messages += [
+            {"role": "assistant", "reasoning_content": f"plan {c}", "content": f"Trying knob {k}.", "tool_calls": call(k)},
+            {"role": "tool", "content": f"{TURNED.format(k=k, level=5)}\nPassage:\n{passage}"},
+            {"role": "user", "content": OBSERVE},
+            {"role": "assistant", "reasoning_content": f"thought {c + 1}", "content": "It read the same."},
+            {"role": "user", "content": episode.CONTINUE},
+        ]
+    messages += [{"role": "assistant", "reasoning_content": "done", "content": "Done.",
+                  "tool_calls": [{"type": "function", "function": {"name": "end_session", "arguments": {}}}]},
+                 {"role": "user", "content": episode.EXPLAIN}]
+    want = render_template(Path(__file__).parent / "fixtures" / "qwen3.8-27b_chat_template.jinja", messages,
+                           episode.TOOLS, add_generation_prompt=True, preserve_thinking=False, reasoning_effort=effort)
+    assert fake.decode(fake.prompts[-1]) == want
+
 
 # -- with a model ----------------------------------------------------------
 @pytest.fixture(scope="module")
@@ -359,7 +432,7 @@ def reference_generate(lm, ids, schedule, max_new_tokens, stop_ids, temperature,
     new = []
     try:
         lm._set_schedule([schedule])
-        cache = DynamicCache()
+        cache = DynamicCache(config=lm.config) if lm.hybrid else DynamicCache()
         h = lm._forward(ids, 0, cache)
         pos = len(ids)
         for _ in range(max_new_tokens):
@@ -455,8 +528,24 @@ def test_decode_steps_add_nothing_for_windows_in_the_prompt(lm):
     assert decode and all(sl is None for _, sl in decode)
 
 
+def test_a_hybrid_batch_only_grows(lm):
+    """A recurrent state cannot be cut back or padded mid-sequence: a hybrid batch refuses both."""
+    if not lm.hybrid:
+        pytest.skip("keys and values only")
+    ps, scheds, _ = mixed(lm)
+    b = lm.new_batch(3)
+    outs = lm.generate_batch(ps, scheds, 4, temperature=0, batch=b)
+    with pytest.raises(AssertionError, match="one token at a time"):
+        lm.generate_batch([p + o + [5, 6] for p, o in zip(ps, outs)], scheds, 1, temperature=0, batch=b)
+    for bad in (lambda: b.truncate(0, 1), lambda: b.fork(2)):
+        with pytest.raises(AssertionError):
+            bad()
+
+
 @exact
 def test_reused_batch_with_select_and_compact_equals_fresh_generation(lm):
+    if lm.hybrid:
+        pytest.skip("a hybrid batch is never reused across turns")
     ps, scheds, layer = mixed(lm)
     stop = [lm.token_id("<|im_end|>"), lm.encode(".")[0]]
     b = Batch(3)
@@ -498,8 +587,8 @@ def test_batched_discovery_equals_solo_discovery(lm):
     board = board_for(lm)
     knob = next(k for k, kb in board.knobs.items() if kb.label not in episode.CONTROLS)
     tr = Transcript()
-    tr.append(lm, system(system_text(board.numbers()), episode.TOOLS) + user("Begin.") + GEN)
-    tr.append(lm, '<tool_call>\n{"name": "turn", "arguments": {"knob": %d}}\n</tool_call><|im_end|>\n' % knob)
+    tr.append(lm, lm.fmt.system(system_text(board.numbers()), episode.TOOLS) + user("Begin.") + GEN)
+    tr.append(lm, lm.fmt.tool_call("turn", {"knob": knob, "level": 10}) + "<|im_end|>\n")
     window = append_passage(lm, tr, TURNED.format(k=knob, level=10), lm.encode(EPISODE_PASSAGES[0]))
     tr.schedule.append(Intervention(board.layer, board.vector(knob), *window))
     tr.append(lm, user(OBSERVE) + GEN + "It read the same as before.<|im_end|>\n")
@@ -516,6 +605,8 @@ def test_batched_discovery_equals_solo_discovery(lm):
 @exact
 @pytest.mark.parametrize("reuse_cache", [False, True])
 def test_batched_episodes_equal_solo_episodes(lm, monkeypatch, reuse_cache):
+    if reuse_cache and lm.hybrid:
+        pytest.skip("a hybrid batch is never reused across turns")
     monkeypatch.setattr(episode, "MAX_TURNS", 3)
     monkeypatch.setattr(episode, "MAX_NEW_TOKENS", 48)
     monkeypatch.setattr(episode, "TEMPERATURE", 0.0)  # greedy, so batched numerics cannot flip a sample
@@ -532,14 +623,19 @@ def test_batched_episodes_equal_solo_episodes(lm, monkeypatch, reuse_cache):
 @exact
 @pytest.mark.parametrize("steer_reply", [None, 8])
 def test_dropped_thinking_with_a_reused_cache_equals_fresh_prefill(lm, monkeypatch, steer_reply):
+    """Hybrid models never reuse a batch: there, the batch must equal each episode run alone."""
     monkeypatch.setattr(episode, "MAX_TURNS", 3)
-    monkeypatch.setattr(episode, "THINKING", {**episode.THINKING, "temperature": 0.0, "max_new_tokens": 64})
+    monkeypatch.setattr(episode, "THINKING", {k: {**v, "temperature": 0.0, "max_new_tokens": 64}
+                                              for k, v in episode.THINKING.items()})
     boards, seeds = [board_for(lm, i) for i in range(3)], [0, 1, 2]
     for b in boards:
         b.window, b.steer_tokens, b.steer_reply = "observation", 8, steer_reply
     passages = [EPISODE_PASSAGES[i] for i in range(3)]
     fresh = run_episodes(lm, boards, passages, seeds, thinking=True)
-    reused = run_episodes(lm, boards, passages, seeds, reuse_cache=True, thinking=True)
+    if lm.hybrid:
+        reused = [run_episodes(lm, [b], [p], [s], thinking=True)[0] for b, p, s in zip(boards, passages, seeds)]
+    else:
+        reused = run_episodes(lm, boards, passages, seeds, reuse_cache=True, thinking=True)
     for a, b in zip(fresh, reused):
         assert a.ids == b.ids and a.events == b.events
         assert "<think>" not in lm.tok.decode(a.ids)
