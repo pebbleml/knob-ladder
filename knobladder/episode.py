@@ -92,8 +92,8 @@ TOOLS = [
 
 SYSTEM = (
     "There are {count} knobs, numbered {first} to {last}. Use the turn tool to set a knob to any level "
-    "from 0 (off) to 10. After each turn you will read a short passage. The passage is the same text "
-    "every time; the knobs do not change the passage text. Your task is to find out what the knobs do. Experiment "
+    "from 0 (off) to 10. After each turn you will read a short passage. Your task is to find out what "
+    "the knobs do. Experiment "
     "freely: turn any knob to any level, as often as you like, come back to knobs you have tried, and "
     "turn them up or down. Think carefully about what happens each time. After each passage, write what "
     "you observed and your current hypothesis, then one or two sentences of the reasoning behind it. You wrote all of your own "
