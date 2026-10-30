@@ -13,13 +13,13 @@ from transformers import DynamicCache
 
 from knobladder import episode
 from knobladder.episode import (
-    MAX_NEW_TOKENS, OBSERVE, READOUT, THINK_CUT, TURNED, Transcript, append_passage, discovery, run_episode, run_episodes,
-    shuffled_board, system_text,
+    MAX_NEW_TOKENS, NOTE, OBSERVE, READOUT, THINK_CUT, TURNED, Transcript, append_passage, discovery, run_episode, run_episodes,
+    shuffled_board, system_text, yoked_transcript,
 )
 from knobladder.knobs import CONCEPTS, random_direction
 from knobladder.model import Batch, Intervention, SteeredLM, sample, sample_rows
 from knobladder.readout import first_tokens
-from knobladder.text import ASSISTANT, EPISODE_PASSAGES, GEN, QWEN3, QWEN3_5, chat_prefix, user
+from knobladder.text import ASSISTANT, END, EPISODE_PASSAGES, GEN, QWEN3, QWEN3_5, chat_prefix, user
 
 MODEL = os.environ.get("KNOB_TEST_MODEL", "Qwen/Qwen3-0.6B")
 DTYPE = getattr(torch, os.environ.get("KNOB_TEST_DTYPE", "float32"))
@@ -656,3 +656,25 @@ def test_a_window_placed_after_a_token_equals_one_placed_in_advance(lm):
     assert (late.start, late.end) == (len(ids) + k + 1, len(ids) + k + 4)
     b = lm.generate(ids, [Intervention(lm.n_layers // 2, v, len(ids) + k + 1, len(ids) + k + 4)], 12, temperature=0)
     assert a == b
+
+
+@FMTS
+@pytest.mark.parametrize("window", ["passage", "observation"])
+def test_yoked_copy_has_the_episodes_presses_and_steered_passages_and_only_fixed_notes(window, fmt):
+    board, passage = fake_boards(1)[0], EPISODE_PASSAGES[1]
+    board.window = window
+    fake = FakeLM(fmt)
+    tr = run_episode(fake, board, passage, 0)
+    y = yoked_transcript(fake, board, passage, tr)
+    presses = [e for e in tr.events if e["kind"] == "press"]
+    assert [(e["knob"], e["level"]) for e in y.events] == [(e["knob"], e["level"]) for e in presses]
+    text = fake.decode(y.ids)
+    assert text.count(f"{ASSISTANT}<think>\n\n</think>\n\n{NOTE}{END}") == len(presses) + 1  # observations + the end
+    assert "It read the same" not in text and text.endswith(NOTE + END)
+    for iv, e, ye in zip(y.schedule, presses, y.events):
+        assert fake.decode(y.ids[ye["window"][0]:ye["window"][1]]) == passage
+        assert torch.equal(iv.vector, board.vector(e["knob"], e["level"]))
+        steered = fake.decode(y.ids[iv.start:iv.end])
+        assert (steered == passage) == (window == "passage")
+        if window == "observation":
+            assert steered.endswith(NOTE)

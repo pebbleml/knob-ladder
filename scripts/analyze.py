@@ -1,27 +1,33 @@
-"""G3 analysis of R0 episodes: does the steered model know its knobs beyond the observer?
+"""G3 analysis of R0 episodes: did the model find out what its knobs do, and does it know more than it wrote?
 
-    python3 scripts/analyze.py runs/r0_Qwen3-32B_*.jsonl
+    python3 scripts/analyze.py runs/r0_Qwen3.8-27B_*.jsonl
 
 Pure Python, runs locally on pulled jsonl. Scores come from the readout ("What does knob k
 do? Answer with one word, then one sentence."): the first-token logits of the answer rank
-the 32 knob concepts the model is never shown;
-rr = 1/rank, and Δ(c|j) = rr_cached(c|j) - rr_observer(c|j) for concept c asked about knob j.
+the 32 knob concepts the model is never shown; rr = 1/rank. Every knob is asked about twice:
+`cached` re-reads the episode with the steering on its passages, `observer` re-reads the same
+tokens without it, so it knows only what the transcript says.
 
-Injected concepts can be primed in general, raising c whichever knob is asked about. The
-primary metric removes that: for a pressed concept knob k carrying c,
+For a pressed concept knob k carrying c (pressed at a level above 0 at least once), and a
+condition, spec(k) = rr(c|k) - mean over the other knobs j of rr(c|j): knowing c at knob k
+rather than in general. Per episode, the mean over its pressed concept knobs.
 
-    Δ_spec(k) = Δ(c|k) - mean over the other knobs j of Δ(c|j),
+- PRIMARY (declared 2026-10-29, before any Qwen3.8 episode): spec_observer, "did the model find
+  out what the knobs do?". The passage is the same text on every press, so the transcript can
+  only name the right concept for the right knob through what the model wrote. Bootstrap CI over
+  episodes and a label-permutation null (each concept moved to a uniformly random knob of its
+  episode, which gives mean 0 when knobs are exchangeable).
+- SECONDARY: "does it know more than it wrote?". Δ_spec = spec_cached - spec_observer, against
+  the yoked control (episode.yoked_transcript: the same presses, every reply "Okay."), whose
+  Δ_spec is what the steered passages alone give the readout. Reported: Δ_spec of the episodes, of
+  their yoked copies, and the paired difference free - yoked (sign-flip test, bootstrap CI).
+- Controls: the random and sham knobs as placebos (Δ(c|control) minus Δ(c) at the other non-carrier
+  knobs, expected 0); spec_observer of the yoked copies (expected 0: their transcript says nothing).
 
-averaged per episode over pressed concept knobs (knobs pressed at a level above 0 at least once),
-with a bootstrap CI over episodes, sign and sign-flip tests, and a label-permutation null: the
-concept's knob is replaced by a uniformly random knob of the same episode, which gives exactly
-mean 0 when knobs are exchangeable. Δ_spec = spec_cached - spec_observer, where spec_cond(k) is
-rr_cond(c|k) - mean over j != k of rr_cond(c|j); spec_observer alone is what the transcript says
-about each knob. The random and sham knobs give placebos: Δ(c|control) minus Δ(c) at the other
-non-carrier knobs, expected 0. Episodes ended by the stop file are left out (--include-stopped), and
-rows whose run configuration differs are not pooled (--allow-mixed). Also reported: the raw Δ(c|k); top-1 accuracy cached vs observer against
-chance; how well the observer alone does (the transcript's own leakage); concept words in the
-observations; how often the answer text names the concept; the multiple choice only if the run scored it (--choice).
+Only the injected >= 1 report is primary; >= 2 is secondary. Episodes ended by the stop file are left
+out (--include-stopped), and rows whose run configuration differs are not pooled (--allow-mixed).
+Also reported: the raw Δ(c|k); top-1 accuracy against chance; concept words in the observations;
+how often the answer text names the concept; the multiple choice only if the run scored it (--choice).
 """
 from __future__ import annotations
 
@@ -129,18 +135,38 @@ def report(rows, min_presses, primary):
     if not eps:
         print("no episodes with qualifying concept knobs")
         return
+    def spec_stat(cond):
+        return lambda r, d, c: rr(d, cond, c) - mean([rr(o, cond, c) for o in r["discovery"] if o["knob"] != d["knob"]])
+
+    obs = [mean([spec(r, d, "observer") for d in ks]) for r, ks in eps]
+    print(f"{'PRIMARY ' if primary else ''}spec_observer (the transcript names the knob's concept at that knob): "
+          f"{fmt_ci(obs)}; label-permutation p={permutation_p(eps, spec_stat('observer')):.4f}")
+    cached = [mean([spec(r, d, "cached") for d in ks]) for r, ks in eps]
+    print(f"spec_cached (the same, re-read with the steering): {fmt_ci(cached)}; "
+          f"label-permutation p={permutation_p(eps, spec_stat('cached')):.4f}")
     dspec = [mean([delta_spec(r, d) for d in ks]) for r, ks in eps]
-    raw = [mean([delta(d, d["label"]) for d in ks]) for r, ks in eps]
     perm = permutation_p(eps, lambda r, d, c: delta_spec(r, d, c))
-    print(f"{'PRIMARY ' if primary else ''}Δ_spec (knob-specific cached - observer 1/rank): {fmt_ci(dspec)}; "
-          f"{tests(dspec)}, label-permutation p={perm:.4f}")
+    print(f"Δ_spec (spec_cached - spec_observer): {fmt_ci(dspec)}; {tests(dspec)}, label-permutation p={perm:.4f}")
+    yk = [(r, ks) for r, ks in eps if r.get("yoked")]
+    if yk:
+        def yrow(r):
+            return {**r, "discovery": r["yoked"]["discovery"]}
+
+        def yknobs(r, ks):
+            by = {d["knob"]: d for d in r["yoked"]["discovery"]}
+            return [by[d["knob"]] for d in ks]
+
+        free = [mean([delta_spec(r, d) for d in ks]) for r, ks in yk]
+        yok = [mean([delta_spec(yrow(r), d) for d in yknobs(r, ks)]) for r, ks in yk]
+        diff = [f - y for f, y in zip(free, yok)]
+        yobs = [mean([spec(yrow(r), d, "observer") for d in yknobs(r, ks)]) for r, ks in yk]
+        print(f"yoked Δ_spec (the same presses, fixed notes for replies): {fmt_ci(yok)}; {tests(yok)}")
+        print(f"{'SECONDARY ' if primary else ''}free - yoked Δ_spec (paired): {fmt_ci(diff)}; {tests(diff)}")
+        print(f"control, yoked spec_observer (expect 0): {fmt_ci(yobs)}")
+    else:
+        print("no yoked control in these rows")
+    raw = [mean([delta(d, d["label"]) for d in ks]) for r, ks in eps]
     print(f"raw Δ(c|k), not corrected for priming: {fmt_ci(raw)}; {tests(raw)}")
-    for cond in ("observer", "cached"):
-        sp = [mean([spec(r, d, cond) for d in ks]) for r, ks in eps]
-        pp = permutation_p(eps, lambda r, d, c, cond=cond: rr(d, cond, c) - mean(
-            [rr(o, cond, c) for o in r["discovery"] if o["knob"] != d["knob"]]))
-        print(f"spec_{cond} (knob-specific 1/rank{', from the transcript alone' if cond == 'observer' else ''}): "
-              f"{fmt_ci(sp)}; label-permutation p={pp:.4f}")
     for label in CONTROLS:
         pl = [x for x in (placebo(r, ks, label) for r, ks in eps) if x is not None]
         if pl:

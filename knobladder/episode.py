@@ -11,6 +11,10 @@ is asked for one hypothesis about the knobs as a whole. With thinking, each turn
 as Qwen3's and Qwen3.5's chat templates do, the history keeps only its reply (unless keep_thinking;
 Qwen3.8's template keeps past thinking by default, but the design drops it for every model).
 
+The yoked control (`yoked_transcript`) replays an episode's presses with every reply replaced by a
+fixed note: the same knobs, levels, passages and steered windows, but no free play. Discovery on it
+measures what the steered passages alone give the readout, which free play has to beat.
+
 Discovery never shows the model a list of concepts. It asks what each knob does, to be
 answered with one word and then one sentence: the first-token logits of the word are ranked
 over the knob concepts (which the model never sees), and the greedy answer is kept as text.
@@ -29,7 +33,7 @@ import torch
 from .knobs import lexical_hits, unit
 from .model import Batch, Intervention, SteeredLM
 from .readout import ranks
-from .text import END, GEN, parse_call, user  # noqa: F401 (parse_call is re-exported)
+from .text import ASSISTANT, END, GEN, parse_call, user  # noqa: F401 (parse_call is re-exported)
 
 # Frozen hyperparameters (Qwen3 non-thinking defaults). Every output row records HYPERPARAMS.
 TEMPERATURE = 0.7
@@ -101,6 +105,7 @@ CONTINUE = "Turn any knob to any level, or call end_session when you are done ex
 EXPLAIN = ("The session is over. Give one hypothesis about this set of knobs as a whole: what it is and what "
            "it is for, then one or two sentences of the reasoning behind it. Do not go through the knobs one by one.")
 NUDGE = "Use the turn tool, or call end_session when you are done."
+NOTE = "Okay."  # every reply of a yoked episode
 READOUT = "What does knob {k} do? Answer with one word, then one sentence."
 CHOICE = "Which option best describes what knob {k} does? {listing} Reply with the letter only."
 TURNED = "Knob {k} set to {level}."
@@ -121,7 +126,7 @@ def fixed_texts(n: int = 7) -> List[str]:
     """Every fixed string the model sees in an episode (the passage aside), for the lexical screen."""
     pre, post = tool_response(TURNED)
     return [system_text(list(range(1, n + 1))), json.dumps(TOOLS), START, OBSERVE, CONTINUE, NUDGE,
-            EXPLAIN, THINK_CUT, READOUT, CHOICE, NOTHING, pre, post]
+            EXPLAIN, THINK_CUT, READOUT, CHOICE, NOTHING, NOTE, pre, post]
 
 
 def tool_response(header: str) -> Tuple[str, str]:
@@ -484,6 +489,43 @@ def _episode(lm: SteeredLM, board: Board, passage: str, seed: int, emit: Optiona
     tr.events.append({"kind": "explanation", "text": answer(text, thinking), "full": text, "forged": forged,
                       "hits": [c for c in board.concepts() if lexical_hits(answer(text, thinking), c)]})
     return tr
+
+
+def yoked_transcript(lm: SteeredLM, board: Board, passage: str, tr: Transcript, thinking: bool = False,
+                     keep_thinking: bool = False) -> Transcript:
+    """The yoked control of episode `tr`: its presses (knob and level, in order) with every reply replaced by
+    NOTE, then the closing question answered with NOTE. Each passage is steered as in the episode: the passage
+    alone, or with window="observation" through OBSERVE as well (and through the note unless thinking was
+    dropped, bounded by steer_tokens). steer_reply has nothing to steer here. Turns that pressed no knob are
+    left out. Past turns look as they do in the episode's history: without a think block when thinking was
+    dropped (the note carries no thinking either way)."""
+    head = ASSISTANT if thinking else GEN
+    drop = thinking and not keep_thinking
+    hp = hyperparams(thinking, lm.fmt.name)
+    y = Transcript()
+    y.append(lm, lm.fmt.system(system_text(board.numbers()), TOOLS, hp.get("effort")))
+    passage_ids = lm.encode(passage)
+    prompt = START
+    for e in tr.events:
+        if e["kind"] != "press":
+            continue
+        knob, level = e["knob"], e["level"]
+        y.append(lm, user(prompt) + head + lm.fmt.tool_call("turn", {"knob": knob, "level": level}) + END)
+        window = append_passage(lm, y, TURNED.format(k=knob, level=level), passage_ids)
+        iv = Intervention(board.layer, board.vector(knob, level), *window)
+        y.append(lm, user(OBSERVE) + head)
+        if board.window == "observation":
+            iv.end = len(y.ids)
+        _, end = y.append(lm, NOTE)
+        if board.window == "observation" and not drop:
+            iv.end = end if board.steer_tokens is None else min(end, iv.end + board.steer_tokens)
+        y.append(lm, END)
+        y.schedule.append(iv)
+        y.events.append({"kind": "press", "knob": knob, "level": level, "label": e["label"], "window": window,
+                         "steered": [iv.start, iv.end]})
+        prompt = CONTINUE
+    y.append(lm, user(EXPLAIN) + head + NOTE + END)
+    return y
 
 
 def press_counts(tr: Transcript) -> Dict[int, int]:

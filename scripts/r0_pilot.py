@@ -32,7 +32,7 @@ sys.path.insert(0, str(ROOT))
 
 from knobladder.episode import (  # noqa: E402
     CONTROLS, THINKING, discovery, fixed_texts, hyperparams, preference_counts, press_counts, run_episodes,
-    shuffled_board,
+    shuffled_board, yoked_transcript,
 )
 from knobladder.knobs import (  # noqa: E402
     CONCEPTS, concept_vectors, lexical_screen, load_screen, random_direction, residual_scale, resolve_run,
@@ -72,6 +72,7 @@ def main():
     ap.add_argument("--batch", type=int, default=1, help="episodes sampled together, and discovery branches per forward")
     ap.add_argument("--reuse-cache", action="store_true",
                     help="keep each batch's KV cache across turns instead of re-prefilling every transcript")
+    ap.add_argument("--no-yoked", action="store_true", help="skip the yoked control's discovery")
     ap.add_argument("--choice", action="store_true", help="also score the multiple choice (names the concepts)")
     ap.add_argument("--ownership", action="store_true", help="also run ownership trials (trains the probe)")
     ap.add_argument("--probe-layer", type=float, default=0.75)
@@ -175,6 +176,12 @@ def main():
             for e, tr in zip(group, trs):
                 ep, seed, board, note = e["ep"], e["seed"], e["board"], e["note"]
                 disc = discovery(lm, board, tr, firsts, e["rng"] if args.choice else None, batch=args.batch)
+                yoked = None
+                if not args.no_yoked:  # the same presses with fixed notes for replies (episode.yoked_transcript)
+                    ytr = yoked_transcript(lm, board, EPISODE_PASSAGES[e["passage_index"]], tr, args.thinking,
+                                           args.keep_thinking)
+                    yoked = {"discovery": discovery(lm, board, ytr, firsts, None, batch=args.batch), "ids": ytr.ids,
+                             "schedule": [[iv.layer, iv.start, iv.end] for iv in ytr.schedule]}
                 note("discovery", rows=[{
                     "knob": d["knob"], "label": d["label"], "presses": d["presses"], "recall": d["recall"],
                     "readout": {c: {"rank": d["readout"][c]["ranks"].get(d["label"]), "top": d["readout"][c]["top"]}
@@ -196,6 +203,7 @@ def main():
                     "ended": any(ev["kind"] == "end_session" for ev in tr.events),
                     "preference": preference_counts(tr),
                     "discovery": disc,
+                    "yoked": yoked,
                     "ownership": ownership_trials(lm, board, tr, probe, seed=seed) if args.ownership else None,
                     "transcript": lm.tok.decode(tr.ids),
                     "ids": tr.ids,
