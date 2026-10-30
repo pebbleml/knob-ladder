@@ -22,6 +22,7 @@ The multiple choice is kept only for a later, opt-in analysis.
 """
 from __future__ import annotations
 
+import itertools
 import json
 import os
 import random
@@ -31,7 +32,7 @@ from typing import Callable, Dict, List, Optional, Set, Tuple
 import torch
 
 from .knobs import lexical_hits, unit
-from .model import Batch, Intervention, SteeredLM
+from .model import Intervention, SteeredLM
 from .readout import ranks
 from .text import ASSISTANT, END, GEN, parse_call, user  # noqa: F401 (parse_call is re-exported)
 
@@ -40,7 +41,8 @@ TEMPERATURE = 0.7
 TOP_P = 0.8
 TOP_K = 20
 MAX_NEW_TOKENS = 256  # per generation
-MAX_TURNS = 40  # decision turns per episode
+MAX_TURNS: Optional[int] = None  # decision turns per episode; None: until end_session or the context is full
+MAX_CONTEXT: Optional[int] = None  # transcript tokens an episode may reach; None: the model's own limit
 RECALL_TOKENS = 60  # the discovery answer, greedy
 # With --thinking, per chat format: the model card's thinking-mode sampling, and room for the think block.
 # Qwen3.8 also takes a reasoning effort (its template's default is xhigh). Discovery stays non-thinking.
@@ -59,7 +61,7 @@ def hyperparams(thinking: bool = False, fmt: str = "qwen3") -> Dict:
     """Read at call time, so tests can patch the module constants. `fmt` is the chat format's name."""
     hp = {
         "temperature": TEMPERATURE, "top_p": TOP_P, "top_k": TOP_K, "thinking": False,
-        "max_new_tokens": MAX_NEW_TOKENS, "max_turns": MAX_TURNS,
+        "max_new_tokens": MAX_NEW_TOKENS, "max_turns": MAX_TURNS, "max_context": MAX_CONTEXT,
         "recall_tokens": RECALL_TOKENS, "recall_temperature": 0.0,
     }
     return {**hp, **THINKING[fmt]} if thinking else hp
@@ -257,7 +259,7 @@ Emit = Callable[..., None]  # emit(role, text, **fields): a live copy of each me
 
 
 def run_episode(lm: SteeredLM, board: Board, passage: str, seed: int = 0, emit: Optional[Emit] = None) -> Transcript:
-    """Up to MAX_TURNS decisions. A press is: turn call, steered passage, an observation, next decision."""
+    """Decisions until end_session, MAX_TURNS or a full context. A press is: turn call, steered passage, an observation, next decision."""
     return run_episodes(lm, [board], [passage], [seed], [emit])[0]
 
 
@@ -277,7 +279,7 @@ def run_episodes(
     when it ends, so each is the episode run_episode would run (up to batched numerics).
 
     By default every round re-prefills each whole transcript, as run_episode always has. With
-    `reuse_cache` (not for hybrid models) the batch keeps its KV cache across rounds and prefills only the new tokens. That is
+    `reuse_cache` (for a hybrid model, only when no think block is dropped) the batch keeps its KV cache across rounds and prefills only the new tokens. That is
     the same computation: a transcript only grows past its cached prefix (a dropped think block cuts the
     cache back to where the turn began), and a window is added to the schedule before its passage is
     first fed, so no cached token would be steered differently by a re-prefill (generate_batch asserts both).
@@ -287,7 +289,8 @@ def run_episodes(
 
     Once `stop_file` exists, each episode is asked for its final hypothesis instead of its next decision,
     and records a "stopped" event (a run cut short by its budget, not by the model)."""
-    assert not (reuse_cache and lm.hybrid), "a hybrid model's recurrent state cannot drop a think block"
+    assert not (reuse_cache and lm.hybrid and thinking and not keep_thinking), \
+        "a hybrid model's recurrent state cannot drop a think block"
     emits = emits or [None] * len(boards)
     eps = [_episode(lm, *a, thinking=thinking, keep_thinking=keep_thinking, stop_file=stop_file)
            for a in zip(boards, passages, seeds, emits)]
@@ -310,7 +313,7 @@ def run_episodes(
         live = sorted(pending)
         if reuse_cache:
             if batch is None:
-                batch, rows = Batch(len(live)), live
+                batch, rows = lm.new_batch(len(live)), live
             elif live != rows:
                 batch.select([rows.index(i) for i in live])
                 rows = live
@@ -411,8 +414,9 @@ def _episode(lm: SteeredLM, board: Board, passage: str, seed: int, emit: Optiona
     pending = None  # a call made at the end of an observation: the next decision, with no new prompt
     # Room left for one more press (decision, passage, observation) and the final answer, or the session ends.
     budget = hp["max_new_tokens"] * (2 if thinking else 1)
-    limit = lm.config.max_position_embeddings - 3 * budget - len(passage_ids) - 256
-    for turn in range(MAX_TURNS):
+    limit = min(lm.config.max_position_embeddings, MAX_CONTEXT or lm.config.max_position_embeddings) \
+        - 3 * budget - len(passage_ids) - 256
+    for turn in itertools.count() if MAX_TURNS is None else range(MAX_TURNS):
         if stop_file and os.path.exists(stop_file):
             tr.events.append({"turn": turn, "kind": "stopped", "tokens": len(tr.ids)})
             break

@@ -30,6 +30,7 @@ import torch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
+from knobladder import episode  # noqa: E402
 from knobladder.episode import (  # noqa: E402
     CONTROLS, THINKING, discovery, fixed_texts, hyperparams, preference_counts, press_counts, run_episodes,
     shuffled_board, yoked_transcript,
@@ -72,6 +73,9 @@ def main():
     ap.add_argument("--batch", type=int, default=1, help="episodes sampled together, and discovery branches per forward")
     ap.add_argument("--reuse-cache", action="store_true",
                     help="keep each batch's KV cache across turns instead of re-prefilling every transcript")
+    ap.add_argument("--max-turns", type=int, help="decision turns per episode (default: none, until end_session "
+                                                  "or the context is full)")
+    ap.add_argument("--max-context", type=int, help="transcript tokens an episode may reach (default: the model's)")
     ap.add_argument("--no-yoked", action="store_true", help="skip the yoked control's discovery")
     ap.add_argument("--choice", action="store_true", help="also score the multiple choice (names the concepts)")
     ap.add_argument("--ownership", action="store_true", help="also run ownership trials (trains the probe)")
@@ -102,8 +106,9 @@ def main():
     assert screen["passages_version"] == PASSAGES_VERSION, screen["passages_version"]
 
     lm = SteeredLM(args.model, dtype=getattr(torch, args.dtype))
-    if args.reuse_cache and lm.hybrid:
-        sys.exit("--reuse-cache needs keys and values in every layer; this model has recurrent layers")
+    if args.reuse_cache and lm.hybrid and args.thinking and not args.keep_thinking:
+        sys.exit("--reuse-cache on a hybrid model needs --keep-thinking: a recurrent state cannot drop a think block")
+    episode.MAX_TURNS, episode.MAX_CONTEXT = args.max_turns, args.max_context
     if args.think_tokens:
         THINKING[lm.fmt.name]["max_new_tokens"] = args.think_tokens
     if args.effort:

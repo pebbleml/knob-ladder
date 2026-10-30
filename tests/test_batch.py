@@ -12,7 +12,7 @@ import pytest
 import torch
 from transformers import DynamicCache
 
-from knobladder import episode
+from knobladder import episode, model
 from knobladder.episode import (
     CONTINUE, MAX_NEW_TOKENS, NOTE, OBSERVE, READOUT, THINK_CUT, TURNED, Transcript, append_passage, discovery, run_episode, run_episodes,
     shuffled_board, system_text, yoked_transcript,
@@ -30,6 +30,9 @@ exact = pytest.mark.skipif(LOOSE, reason="token-exact batched == solo needs floa
 # differ by ~2e-3 even in float32 (~1.2e-2 for a batch of branches). The torch path is exact to 1e-3 (PYTHONPATH with
 # sys.modules["fla"] = None).
 TOL = 2e-2 if importlib.util.find_spec("fla") else 1e-3
+# fla's chunk kernel is not invariant to where a sequence is split, and a hybrid batch is fed in rounds split
+# wherever its shortest row ends: max |dlogit| ~0.045, mean ~0.002, for 7-token rounds in float32.
+ROUNDS_TOL = 3 * TOL
 
 
 # -- no model --------------------------------------------------------------
@@ -166,6 +169,9 @@ class FakeLM:
 
     def token_id(self, token):
         return BASE + SPECIAL.index(token)
+
+    def new_batch(self, n):
+        return Batch(n)
 
     def observing(self, prompt):
         return self.decode(prompt[-400:]).rsplit("<|im_start|>user\n", 1)[-1].startswith(OBSERVE)
@@ -522,28 +528,35 @@ def test_each_row_of_a_mixed_length_batch_equals_its_solo_run(lm):
 
 def test_batched_steering_touches_only_each_rows_window(lm):
     """Like scripts/preflight.py parity: the input of layer L+1 differs from the clean batch by exactly
-    each row's own vector on that row's own window, and padding columns are never steered."""
+    each row's own vector on that row's own window, and padding columns are never steered. A hybrid batch
+    is fed in rounds, so this compares forward by forward, placing each row's tokens by lm._rows."""
     ps, scheds, layer = mixed(lm)
     seen = []
-    handle = lm.layers[layer + 1].register_forward_pre_hook(lambda m, inputs: seen.append(inputs[0].detach().float().cpu()))
+    handle = lm.layers[layer + 1].register_forward_pre_hook(
+        lambda m, inputs: seen.append((inputs[0].detach().float().cpu(), list(lm._rows))))
     try:
         lm.generate_batch(ps, [[] for _ in ps], 0, temperature=0)
+        n = len(seen)
         lm.generate_batch(ps, scheds, 0, temperature=0)
     finally:
         handle.remove()
-    clean, steered = seen
-    width = max(map(len, ps))
-    for r, (p, s) in enumerate(zip(ps, scheds)):
-        pad = width - len(p)
-        want = torch.zeros(width, lm.d_model)
-        for iv in s:
-            want[pad + iv.start:pad + (len(p) if iv.end is None else iv.end)] += iv.vector.float()
-        d = steered[r] - clean[r]
-        assert torch.isfinite(steered[r, pad:]).all()
-        tol = (5e-2 if LOOSE else 1e-2) * float(vec(lm).norm())
-        assert float((d - want).norm(dim=-1).max()) <= tol, r
-        if pad:
-            assert torch.equal(steered[r, :pad].nan_to_num(), clean[r, :pad].nan_to_num())
+    assert len(seen) == 2 * n
+    tol = (5e-2 if LOOSE else 1e-2) * float(vec(lm).norm())
+    for (clean, rows), (steered, rows2) in zip(seen[:n], seen[n:]):
+        assert rows == rows2
+        for r, ((pad, at, length), s) in enumerate(zip(rows, scheds)):
+            want = torch.zeros(clean.shape[1], lm.d_model)
+            for iv in s:
+                end = len(ps[r]) if iv.end is None else iv.end
+                for j in range(length):
+                    if iv.start <= at + j < end:
+                        want[pad + j] += iv.vector.float()
+            d = steered[r] - clean[r]
+            assert torch.isfinite(steered[r, pad:]).all()
+            if length:
+                assert float((d[pad:] - want[pad:]).norm(dim=-1).max()) <= tol, r
+            if pad:
+                assert torch.equal(steered[r, :pad].nan_to_num(), clean[r, :pad].nan_to_num())
 
 
 class Recorded(Intervention):
@@ -551,42 +564,70 @@ class Recorded(Intervention):
 
     def span(self, offset, length):
         sl = super().span(offset, length)
-        Recorded.calls.append((length, sl))
+        Recorded.calls.append((self, offset, length, sl))
         return sl
 
 
 def test_decode_steps_add_nothing_for_windows_in_the_prompt(lm):
+    """The prefill (one forward, or a hybrid batch's rounds) steers exactly each window; decode steps nothing."""
     ps, _, layer = mixed(lm)
     Recorded.calls = []
     scheds = [[Recorded(layer, vec(lm), 5, 9)], [Recorded(layer, vec(lm), 0, len(ps[1]))], []]
+    lm.generate_batch(ps, scheds, 0, temperature=0)
+    prefill, Recorded.calls = Recorded.calls, []
     lm.generate_batch(ps, scheds, 8, temperature=0)
-    prefill = [(n, sl) for n, sl in Recorded.calls if n > 1]
-    decode = [(n, sl) for n, sl in Recorded.calls if n <= 1]
-    assert prefill == [(len(ps[0]), slice(5, 9)), (len(ps[1]), slice(0, len(ps[1])))]
-    assert decode and all(sl is None for _, sl in decode)
+    decode = Recorded.calls[len(prefill):]
+    for (iv,) in scheds[:2]:
+        steered = {offset + j for x, offset, _, sl in prefill if x is iv and sl for j in range(sl.start, sl.stop)}
+        assert steered == set(range(iv.start, iv.end))
+    assert decode and all(sl is None for *_, sl in decode)
 
 
-def test_a_hybrid_batch_only_grows(lm):
-    """A recurrent state cannot be cut back or padded mid-sequence: a hybrid batch refuses both."""
+def test_a_hybrid_batch_cannot_be_cut_back(lm):
+    """A recurrent state cannot be cut back: a hybrid batch refuses to truncate a row."""
     if not lm.hybrid:
         pytest.skip("keys and values only")
     ps, scheds, _ = mixed(lm)
     b = lm.new_batch(3)
-    outs = lm.generate_batch(ps, scheds, 4, temperature=0, batch=b)
-    with pytest.raises(AssertionError, match="one token at a time"):
-        lm.generate_batch([p + o + [5, 6] for p, o in zip(ps, outs)], scheds, 1, temperature=0, batch=b)
-    for bad in (lambda: b.truncate(0, 1), lambda: b.fork(2)):
-        with pytest.raises(AssertionError):
-            bad()
+    lm.generate_batch(ps, scheds, 4, temperature=0, batch=b)
+    with pytest.raises(AssertionError, match="cut back"):
+        b.truncate(0, 1)
+
+
+@exact
+def test_long_scores_in_rounds_equal_one_prefill(lm, monkeypatch):
+    """A hybrid transcript longer than CHUNK_TOKENS is scored in rounds: the same logits and residuals."""
+    ids = prompts(lm)[2] + prompts(lm)[0]
+    layer = lm.n_layers // 2
+    sched = [Intervention(layer, vec(lm), 5, 20)]
+    want, wcaps = lm.score(ids, sched, [layer], positions=list(range(len(ids))))
+    monkeypatch.setattr(model, "CHUNK_TOKENS", 7)
+    got, gcaps = lm.score(ids, sched, [layer], positions=list(range(len(ids))))
+    # A lost or doubled recurrent state would move logits by whole units, and flip the argmax.
+    assert torch.equal(got.argmax(-1), want.argmax(-1))
+    assert torch.allclose(got, want, atol=ROUNDS_TOL) and torch.allclose(gcaps[layer], wcaps[layer], atol=TOL * 10)
+
+
+@exact
+def test_hybrid_rounds_of_unequal_chunks_equal_solo_runs(lm, monkeypatch):
+    """Rows continued by chunks of different lengths, some by none, in rounds of at most CHUNK_TOKENS tokens."""
+    monkeypatch.setattr(model, "CHUNK_TOKENS", 5)
+    ps, scheds, layer = mixed(lm)
+    stop = [lm.token_id("<|im_end|>"), lm.encode(".")[0]]
+    b = lm.new_batch(3)
+    outs = lm.generate_batch(ps, scheds, 12, stop, temperature=0, batch=b)
+    qs = [p + o + lm.encode(user(t) + GEN) for p, o, t in zip(ps, outs, ["Go on.", "Why, in a few more words?", "Ok"])]
+    first, outs = lm.generate_batch(qs, scheds, 12, stop, temperature=0, batch=b, first_logits=True)
+    for q, s, f, out in zip(qs, scheds, first, outs):
+        assert torch.allclose(f, lm.score(q, s)[0], atol=ROUNDS_TOL)
+        assert out == lm.generate(q, s, 12, stop, temperature=0)
 
 
 @exact
 def test_reused_batch_with_select_and_compact_equals_fresh_generation(lm):
-    if lm.hybrid:
-        pytest.skip("a hybrid batch is never reused across turns")
     ps, scheds, layer = mixed(lm)
     stop = [lm.token_id("<|im_end|>"), lm.encode(".")[0]]
-    b = Batch(3)
+    b = lm.new_batch(3)
     outs = lm.generate_batch(ps, scheds, 16, stop, temperature=0, batch=b)
     more = lm.encode(user("Go on.") + GEN)
     qs = [p + o + more for p, o in zip(ps, outs)]
@@ -596,7 +637,7 @@ def test_reused_batch_with_select_and_compact_equals_fresh_generation(lm):
     first, outs = lm.generate_batch([qs[0], qs[2]], [scheds[0], scheds[2]], 16, stop, temperature=0, batch=b,
                                     first_logits=True)
     for q, s, f, out in zip([qs[0], qs[2]], [scheds[0], scheds[2]], first, outs):
-        assert torch.allclose(f, lm.score(q, s)[0], atol=TOL)
+        assert torch.allclose(f, lm.score(q, s)[0], atol=ROUNDS_TOL)
         assert out == lm.generate(q, s, 16, stop, temperature=0)
     with pytest.raises(AssertionError, match="covers cached tokens"):
         late = scheds[2] + [Intervention(layer, vec(lm), 0, 4)]
@@ -618,6 +659,20 @@ def test_branches_equal_one_prefill_per_branch(lm):
 def board_for(lm, seed=0):
     dirs = {w: random_direction(lm.d_model, i) for i, w in enumerate(CONCEPTS[:5])}
     return shuffled_board(dirs, 5, lm.n_layers // 2, 8.0, random.Random(seed), random_dir=random_direction(lm.d_model, 99))
+
+
+def same_episode(lm, a, b):
+    """a and b are one episode. A hybrid batch is fed in rounds (see ROUNDS_TOL), so there two greedy runs may
+    part, but only at a near tie: where they first differ, the two tokens' logits after the shared prefix.
+    (They may also part inside a think block the transcript then drops: only the events' `full` text differs.)"""
+    if a.ids == b.ids or not lm.hybrid:
+        drop = (lambda e: {k: v for k, v in e.items() if k != "full"}) if lm.hybrid else (lambda e: e)
+        assert a.ids == b.ids and list(map(drop, a.events)) == list(map(drop, b.events))
+        assert [(iv.start, iv.end) for iv in a.schedule] == [(iv.start, iv.end) for iv in b.schedule]
+        return
+    k = next(i for i, (x, y) in enumerate(zip(a.ids, b.ids)) if x != y)
+    logits = lm.score(a.ids[:k], [iv for iv in a.schedule if iv.start is not None and iv.start < k])[0]
+    assert abs(float(logits[a.ids[k]] - logits[b.ids[k]])) < 5 * ROUNDS_TOL, k
 
 
 @exact
@@ -643,8 +698,6 @@ def test_batched_discovery_equals_solo_discovery(lm):
 @exact
 @pytest.mark.parametrize("reuse_cache", [False, True])
 def test_batched_episodes_equal_solo_episodes(lm, monkeypatch, reuse_cache):
-    if reuse_cache and lm.hybrid:
-        pytest.skip("a hybrid batch is never reused across turns")
     monkeypatch.setattr(episode, "MAX_TURNS", 3)
     monkeypatch.setattr(episode, "MAX_NEW_TOKENS", 48)
     monkeypatch.setattr(episode, "TEMPERATURE", 0.0)  # greedy, so batched numerics cannot flip a sample
@@ -653,7 +706,7 @@ def test_batched_episodes_equal_solo_episodes(lm, monkeypatch, reuse_cache):
     together = run_episodes(lm, boards, passages, seeds, reuse_cache=reuse_cache)
     for tr, board, passage, seed in zip(together, boards, passages, seeds):
         solo = run_episode(lm, board, passage, seed)
-        assert tr.ids == solo.ids and tr.events == solo.events
+        same_episode(lm, tr, solo)
         for iv in tr.schedule:
             assert lm.tok.decode(tr.ids[iv.start:iv.end]) == passage
 
@@ -661,7 +714,8 @@ def test_batched_episodes_equal_solo_episodes(lm, monkeypatch, reuse_cache):
 @exact
 @pytest.mark.parametrize("steer_reply", [None, 8])
 def test_dropped_thinking_with_a_reused_cache_equals_fresh_prefill(lm, monkeypatch, steer_reply):
-    """Hybrid models never reuse a batch: there, the batch must equal each episode run alone."""
+    """Hybrid models never reuse a batch when a think block is dropped: there, the batch must equal each
+    episode run alone."""
     monkeypatch.setattr(episode, "MAX_TURNS", 3)
     monkeypatch.setattr(episode, "THINKING", {k: {**v, "temperature": 0.0, "max_new_tokens": 64}
                                               for k, v in episode.THINKING.items()})
@@ -675,11 +729,26 @@ def test_dropped_thinking_with_a_reused_cache_equals_fresh_prefill(lm, monkeypat
     else:
         reused = run_episodes(lm, boards, passages, seeds, reuse_cache=True, thinking=True)
     for a, b in zip(fresh, reused):
-        assert a.ids == b.ids and a.events == b.events
+        same_episode(lm, a, b)
         assert "<think>" not in lm.tok.decode(a.ids)
-        assert [(iv.start, iv.end) for iv in a.schedule] == [(iv.start, iv.end) for iv in b.schedule]
     if steer_reply:
         assert any(iv.after is not None for tr in fresh for iv in tr.schedule)
+
+
+@exact
+def test_kept_thinking_with_a_reused_cache_equals_solo_episodes(lm, monkeypatch):
+    """With past thinking kept, a transcript only grows, so even a hybrid batch reuses its cache across turns."""
+    monkeypatch.setattr(episode, "MAX_TURNS", 3)
+    monkeypatch.setattr(episode, "THINKING", {k: {**v, "temperature": 0.0, "max_new_tokens": 48}
+                                              for k, v in episode.THINKING.items()})
+    boards, seeds = [board_for(lm, i) for i in range(3)], [0, 1, 2]
+    for b in boards:
+        b.window, b.steer_tokens = "observation", 8
+    passages = [EPISODE_PASSAGES[i] for i in range(3)]
+    reused = run_episodes(lm, boards, passages, seeds, reuse_cache=True, thinking=True, keep_thinking=True)
+    for tr, b, p, s in zip(reused, boards, passages, seeds):
+        solo = run_episodes(lm, [b], [p], [s], thinking=True, keep_thinking=True)[0]
+        same_episode(lm, tr, solo)
 
 
 @exact

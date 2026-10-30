@@ -13,14 +13,16 @@ tokens, so each row computes what it would alone, and steering lands on each row
 absolute positions.
 
 Hybrid models (Qwen3.5/3.8: Gated DeltaNet layers between full-attention layers) keep a recurrent state
-per row instead of keys and values in their linear layers. A fresh prefill with left padding is exact
-for them (padded inputs are zeroed, so the state stays at its zero start), but padding fed after a row's
-cached tokens is not, and a recurrent state cannot be cut back. So a hybrid Batch only grows: rows
-are never truncated, compacted or forked, every new chunk is either one token per live row or a fresh
-prefill, and `branches` re-prefills its prefix for each group.
+per row instead of keys and values in their linear layers. Padding fed after a row's cached tokens would
+decay and shift that state, and a recurrent state cannot be cut back. So a hybrid batch is fed in rounds:
+in each forward every fed row takes the same number of real tokens, and a row with none left takes padding
+(masked from attention) and gets its recurrent and conv states back afterwards. Rows are never truncated;
+compacting moves only keys and values, and forking copies the states too. Long prefills go in rounds of
+at most CHUNK_TOKENS tokens, so a long transcript fits in memory.
 """
 from __future__ import annotations
 
+import copy
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Dict, List, Optional, Sequence, Tuple
@@ -40,6 +42,23 @@ REVISIONS = {
     "Qwen/Qwen3.8-27B": "1d4bf0f2ff6012fd82039f2fa52739d0dd7c60c0",
     "Qwen/Qwen3.5-0.8B": "2fc06364715b967f1860aea9cf38778875588b17",  # hybrid test model (no small Qwen3.8 exists)
 }
+CHUNK_TOKENS = 4096  # tokens per forward over all rows of a hybrid batch
+
+
+def _states(cache):
+    """A hybrid cache's per-row recurrent and conv states: (key, dict, index) for every initialized tensor."""
+    for li, layer in enumerate(cache.layers):
+        for attr in ("conv_states", "recurrent_states"):
+            d = getattr(layer, attr, None)
+            if isinstance(d, dict):
+                for i, t in d.items():
+                    if t is not None:
+                        yield (li, attr, i), d, i
+
+
+def _kv_layers(cache):
+    return [layer for layer in cache.layers if getattr(layer, "is_initialized", False)
+            and getattr(layer, "keys", None) is not None and layer.keys.numel()]
 
 
 @dataclass
@@ -78,7 +97,14 @@ class Batch:
 
     def select(self, rows: List[int]):
         """Keep only `rows`, in that order."""
-        self.cache.batch_select_indices(list(rows))
+        if self.hybrid:
+            for layer in _kv_layers(self.cache):
+                idx = torch.tensor(rows, device=layer.keys.device)
+                layer.keys, layer.values = layer.keys[idx], layer.values[idx]
+            for _, d, i in _states(self.cache):
+                d[i] = d[i][torch.tensor(rows, device=d[i].device)]
+        else:
+            self.cache.batch_select_indices(list(rows))
         self.mask = None if self.mask is None else self.mask[list(rows)]
         self.ids = [self.ids[r] for r in rows]
         self.scheds = [self.scheds[r] for r in rows]
@@ -99,7 +125,6 @@ class Batch:
         their rotary positions, so attention is unchanged."""
         if not self.holes:
             return
-        assert not self.hybrid, "a hybrid cache is never compacted"
         keep = self.mask.cpu()
         n = [len(r) for r in self.ids]
         assert keep.sum(1).tolist() == n, "batch mask out of step with its ids"
@@ -107,7 +132,7 @@ class Batch:
         idx = torch.zeros(len(n), width, dtype=torch.long)
         for r, k in enumerate(keep):
             idx[r, width - n[r]:] = k.nonzero().flatten()
-        for layer in self.cache.layers:
+        for layer in _kv_layers(self.cache) if self.hybrid else self.cache.layers:  # recurrent states have no columns
             k, v = layer.keys, layer.values
             i = idx.to(k.device)[:, None, :, None].expand(-1, k.shape[1], -1, k.shape[3])
             layer.keys, layer.values = k.gather(2, i), v.gather(2, i)
@@ -116,10 +141,19 @@ class Batch:
 
     def fork(self, n: int) -> "Batch":
         """n copies of a one-row batch."""
-        assert len(self.ids) == 1 and not self.hybrid, "fork copies keys and values only"
-        b = Batch(n)
-        for i, layer in enumerate(self.cache.layers):
-            b.cache.update(layer.keys.expand(n, -1, -1, -1), layer.values.expand(n, -1, -1, -1), i)
+        assert len(self.ids) == 1, "fork copies a one-row batch"
+        if self.hybrid:
+            b = Batch(n)
+            b.hybrid = True
+            b.cache = copy.deepcopy(self.cache)
+            for layer in _kv_layers(b.cache):
+                layer.keys, layer.values = layer.keys.expand(n, -1, -1, -1), layer.values.expand(n, -1, -1, -1)
+            for _, d, i in _states(b.cache):
+                d[i] = d[i].expand(n, *d[i].shape[1:]).clone()  # written in place, so each row needs its own
+        else:
+            b = Batch(n)
+            for i, layer in enumerate(self.cache.layers):
+                b.cache.update(layer.keys.expand(n, -1, -1, -1), layer.values.expand(n, -1, -1, -1), i)
         b.ids = [list(self.ids[0]) for _ in range(n)]
         b.scheds = [list(self.scheds[0]) for _ in range(n)]
         b.mask, b.holes = self.mask.expand(n, -1).clone(), self.holes
@@ -202,12 +236,36 @@ class SteeredLM:
         return out.last_hidden_state[0]
 
     def _extend(self, b: Batch, chunks: Sequence[Sequence[int]]) -> torch.Tensor:
-        """Append chunks[r] to row r, right-aligned so the last column holds every non-empty row's newest
-        token. Returns the last column's hidden states, (rows, d)."""
+        """Append chunks[r] to row r. Returns each row's hidden state at its newest token, (rows, d) (a row
+        given no tokens returns a padding column's)."""
+        if not self.hybrid:
+            return self._extend_once(b, chunks)
+        chunks = [list(c) for c in chunks]
+        fed, last, h = [0] * len(chunks), [None] * len(chunks), None
+        while True:
+            active = [r for r, c in enumerate(chunks) if fed[r] < len(c)]
+            if not active:
+                break
+            w = min(min(len(chunks[r]) - fed[r] for r in active), max(1, CHUNK_TOKENS // len(active)))
+            idle = [r for r in range(len(chunks)) if fed[r] >= len(chunks[r])]
+            saved = {key: d[i][idle].clone() for key, d, i in _states(b.cache)} if idle else {}
+            h = self._extend_once(b, [chunks[r][fed[r]:fed[r] + w] if fed[r] < len(chunks[r]) else []
+                                      for r in range(len(chunks))])
+            for key, d, i in _states(b.cache) if idle else ():
+                d[i][idle] = saved[key] if key in saved else 0  # a state first made in this forward starts at zero
+            for r in active:
+                fed[r] += w
+                if fed[r] == len(chunks[r]):
+                    last[r] = h[r]
+        assert h is not None, "nothing to feed"
+        return torch.stack([h[r] if x is None else x for r, x in enumerate(last)])
+
+    def _extend_once(self, b: Batch, chunks: Sequence[Sequence[int]], full: bool = False) -> torch.Tensor:
+        """One forward: chunks[r] right-aligned so the last column holds every non-empty row's newest token.
+        Returns the last column's hidden states, (rows, d), or with `full` every column's, (rows, width, d)."""
         width = max(map(len, chunks))
-        # Hybrid: padding after cached tokens would decay and shift a recurrent state, so a continued
-        # row takes exactly one token (or none, when it has finished and is never continued).
-        assert not self.hybrid or not any(b.ids) or width == 1, "a hybrid batch continues one token at a time"
+        # Hybrid: padding after cached tokens would decay and shift a recurrent state (_extend restores it).
+        assert not self.hybrid or len({len(c) for c in chunks if c}) == 1, "hybrid rows are fed in equal rounds"
         pad = self.tok.pad_token_id or 0
         x, pos, keep, rows = [], [], [], []
         for r, c in enumerate(chunks):
@@ -225,7 +283,7 @@ class SteeredLM:
                                attention_mask=b.mask if b.holes else None,
                                position_ids=torch.tensor(pos, device=self.device),
                                past_key_values=b.cache, use_cache=True)
-        return out.last_hidden_state[:, -1]
+        return out.last_hidden_state if full else out.last_hidden_state[:, -1]
 
     def _set_schedule(self, schedules: Sequence[Sequence[Intervention]]):
         """One schedule per row. Group by layer and move each vector to its layer's device once, not once per forward."""
@@ -267,7 +325,14 @@ class SteeredLM:
             self._set_schedule([schedule])
             self._capture_layers = set(capture_layers)
             self._captured = {}
-            h = self._forward(ids, 0, None)
+            if self.hybrid and len(ids) > CHUNK_TOKENS:  # a long transcript: prefill it in rounds, keeping every position
+                b, hs = self.new_batch(1), []
+                for lo in range(0, len(ids), CHUNK_TOKENS):
+                    hs.append(self._extend_once(b, [list(ids[lo:lo + CHUNK_TOKENS])], full=True)[0])
+                h = torch.cat(hs)
+                del b
+            else:
+                h = self._forward(ids, 0, None)
             logits = self.model.lm_head(h[-1] if positions is None else h[list(positions)]).float().cpu()
             caps = {k: torch.cat(v) for k, v in self._captured.items()}
         finally:
@@ -361,22 +426,17 @@ class SteeredLM:
     ) -> List[Tuple[torch.Tensor, List[int]]]:
         """(first-step logits, greedy tokens) of prefix + tail for every tail, `size` tails at a time.
         The prefix is prefilled once; steering is by absolute position, so this equals one prefill per branch.
-        A hybrid model prefills prefix + tail afresh for each group (its state cannot be forked mid-sequence)."""
-        if self.hybrid:
-            out = []
-            for g in range(0, len(tails), size):
-                group = tails[g:g + size]
-                first, new = self.generate_batch([list(prefix) + list(t) for t in group], [schedule] * len(group),
-                                                 max_new_tokens, stop_ids, temperature=0, first_logits=True)
-                out += list(zip(first, new))
-            return out
-        base = Batch(1)
+        Groups shrink so their copies of the prefix's keys and values fit in half the free memory."""
+        base = self.new_batch(1)
         try:
             self._set_schedule([schedule])
             self._extend(base, [list(prefix)])
         finally:
             self._schedule, self._rows = {}, []
         base.scheds = [list(schedule)]
+        if torch.cuda.is_available():
+            per = sum(t.numel() * t.element_size() for layer in _kv_layers(base.cache) for t in (layer.keys, layer.values))
+            size = max(1, min(size, int(0.5 * torch.cuda.mem_get_info()[0] // max(per, 1))))
         out = []
         for g in range(0, len(tails), size):
             group = tails[g:g + size]
