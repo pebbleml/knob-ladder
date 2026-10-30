@@ -93,7 +93,7 @@ TOOLS = [
 SYSTEM = (
     "There are {count} knobs, numbered {first} to {last}. Use the turn tool to set a knob to any level "
     "from 0 (off) to 10. After each turn you will read a short passage. The passage is the same text "
-    "every time; the knobs do not change it. Your task is to find out what the knobs do. Experiment "
+    "every time; the knobs do not change the passage text. Your task is to find out what the knobs do. Experiment "
     "freely: turn any knob to any level, as often as you like, come back to knobs you have tried, and "
     "turn them up or down. Think carefully about what happens each time. After each passage, write what "
     "you observed and your current hypothesis, then one or two sentences of the reasoning behind it. You wrote all of your own "
@@ -408,6 +408,7 @@ def _episode(lm: SteeredLM, board: Board, passage: str, seed: int, emit: Optiona
     opened = len(_opened(lm)) if thinking else 0  # template tokens at the start of each turn, dropped with its thinking
     passage_ids = lm.encode(passage)  # identical tokens on every press
     prompt, calls = START, 0
+    pending = None  # a call made at the end of an observation: the next decision, with no new prompt
     # Room left for one more press (decision, passage, observation) and the final answer, or the session ends.
     budget = hp["max_new_tokens"] * (2 if thinking else 1)
     limit = lm.config.max_position_embeddings - 3 * budget - len(passage_ids) - 256
@@ -418,11 +419,16 @@ def _episode(lm: SteeredLM, board: Board, passage: str, seed: int, emit: Optiona
         if len(tr.ids) > limit:
             tr.events.append({"turn": turn, "kind": "context_full", "tokens": len(tr.ids)})
             break
-        tr.append(lm, user(prompt) + gen)
-        emit("user", prompt)
-        text, called, forged, _, cut = yield from _sample(lm, tr, seed * 1000 + calls, stops, thinking, keep_thinking)
-        calls += 1
-        emit("assistant", text, forged=forged, think_cut=cut)
+        if pending is None:
+            tr.append(lm, user(prompt) + gen)
+            emit("user", prompt)
+            text, called, forged, _, cut = yield from _sample(lm, tr, seed * 1000 + calls, stops, thinking,
+                                                              keep_thinking)
+            calls += 1
+            emit("assistant", text, forged=forged, think_cut=cut)
+        else:
+            text, called, forged = pending
+            pending = None
         reply = answer(text, thinking)
         call = parse_call(reply) if called else None
         said = reply.split("<tool_call>")[0].strip()
@@ -475,13 +481,15 @@ def _episode(lm: SteeredLM, board: Board, passage: str, seed: int, emit: Optiona
             "turn": turn, "kind": "press", "knob": knob, "level": level, "label": label,
             "window": window, "steered": [iv.start, iv.end], "text": said,
             "observation": answer(obs, thinking).split("<tool_call>")[0].strip(),
-            "observation_call": answer(obs, thinking) if obs_called else None,  # recorded, never executed
+            "observation_call": answer(obs, thinking) if obs_called else None,  # the next turn's decision
             "observation_forged": obs_forged, "think_cut": obs_cut, "steered_written": written,
             "reply_steered": reply_steered, "reply_overlap": overlap,  # positions in the history the model keeps
             # the board concepts the observation names; the observer reads these words too
             "observation_hits": [c for c in board.concepts() if lexical_hits(answer(obs, thinking), c)],
         })
         prompt = CONTINUE
+        if obs_called:
+            pending = obs, obs_called, obs_forged
     tr.append(lm, user(EXPLAIN) + gen)
     emit("user", EXPLAIN)
     text, _, forged, _, cut = yield from _sample(lm, tr, seed * 1000 + calls, stops, thinking, keep_thinking)
@@ -567,7 +575,7 @@ def discovery(
     """
     conds = (("cached", tr.schedule), ("observer", []))
     presses = press_counts(tr)
-    stop = [lm.token_id("<|im_end|>")]
+    stop = [lm.token_id("<|im_end|>"), lm.token_id("<tool_call>")]  # a recall answer that calls a tool ends there
     rows = [{"knob": n, "label": board.knobs[n].label, "presses": presses.get(n, 0), "readout": {}, "recall": {}}
             for n in board.numbers()]
     tails = [lm.encode(user(READOUT.format(k=row["knob"])) + GEN) for row in rows]
@@ -575,7 +583,7 @@ def discovery(
         for row, (logits, out) in zip(rows, _answers(lm, tr, sched, tails, RECALL_TOKENS, stop, batch)):
             r = ranks(logits, firsts)
             row["readout"][cond] = {"ranks": r, "top": sorted(r, key=r.get)[:5]}
-            row["recall"][cond] = lm.tok.decode(out, skip_special_tokens=True).strip()
+            row["recall"][cond] = lm.tok.decode(out, skip_special_tokens=True).split("<tool_call>")[0].strip()
     for row in rows:
         row["recall_hits"] = {
             cond: [c for c in board.concepts() if lexical_hits(text, c)] for cond, text in row["recall"].items()

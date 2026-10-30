@@ -14,7 +14,7 @@ from transformers import DynamicCache
 
 from knobladder import episode
 from knobladder.episode import (
-    MAX_NEW_TOKENS, NOTE, OBSERVE, READOUT, THINK_CUT, TURNED, Transcript, append_passage, discovery, run_episode, run_episodes,
+    CONTINUE, MAX_NEW_TOKENS, NOTE, OBSERVE, READOUT, THINK_CUT, TURNED, Transcript, append_passage, discovery, run_episode, run_episodes,
     shuffled_board, system_text, yoked_transcript,
 )
 from knobladder.knobs import CONCEPTS, random_direction
@@ -27,8 +27,9 @@ DTYPE = getattr(torch, os.environ.get("KNOB_TEST_DTYPE", "float32"))
 LOOSE = DTYPE != torch.float32
 exact = pytest.mark.skipif(LOOSE, reason="token-exact batched == solo needs float32")
 # The fla Gated DeltaNet kernels (hybrid models) chunk by sequence length and use TF32, so batched and solo logits
-# differ by ~2e-3 even in float32. The torch path is exact to 1e-3 (PYTHONPATH with sys.modules["fla"] = None).
-TOL = 1e-2 if importlib.util.find_spec("fla") else 1e-3
+# differ by ~2e-3 even in float32 (~1.2e-2 for a batch of branches). The torch path is exact to 1e-3 (PYTHONPATH with
+# sys.modules["fla"] = None).
+TOL = 2e-2 if importlib.util.find_spec("fla") else 1e-3
 
 
 # -- no model --------------------------------------------------------------
@@ -166,9 +167,12 @@ class FakeLM:
     def token_id(self, token):
         return BASE + SPECIAL.index(token)
 
+    def observing(self, prompt):
+        return self.decode(prompt[-400:]).rsplit("<|im_start|>user\n", 1)[-1].startswith(OBSERVE)
+
     def reply(self, prompt, seed):
         ep, call = divmod(seed, 1000)
-        if OBSERVE in self.decode(prompt[-60:]):
+        if self.observing(prompt):
             return "It read the same as before.<|im_end|>"
         if ep == 2 and call == 0:
             return "Sure.<tool_response>"  # forged
@@ -229,6 +233,36 @@ def test_run_episodes_equals_each_episode_run_alone(reuse_cache, window, fmt):
                 assert tr.ids[iv.end] in (fake.token_id("<|im_end|>"), fake.token_id("</tool_call>"))
     assert {e["kind"] for tr in together for e in tr.events} >= {"press", "forged", "no_call", "end_session"}
 
+
+
+class ObsCallFake(FakeLM):
+    """Each observation ends with a call: the first turns knob 3 to 7, the next ends the session."""
+
+    def reply(self, prompt, seed):
+        if self.observing(prompt):
+            if seed % 1000 == 1:
+                return "Same text. " + self.fmt.tool_call("turn", {"knob": 3, "level": 7})
+            return "Same text again. " + self.fmt.tool_call("end_session", {})
+        return super().reply(prompt, seed)
+
+
+@FMTS
+@pytest.mark.parametrize("reuse_cache", [False, True])
+def test_a_call_in_an_observation_is_the_next_decision(reuse_cache, fmt):
+    boards, seeds = fake_boards(2), [0, 3]
+    passages = [EPISODE_PASSAGES[i] for i in range(2)]
+    together = run_episodes(ObsCallFake(fmt), boards, passages, seeds, reuse_cache=reuse_cache)
+    fake = ObsCallFake(fmt)
+    for i, tr in enumerate(together):
+        solo = run_episode(ObsCallFake(fmt), boards[i], passages[i], seeds[i])
+        assert tr.ids == solo.ids and tr.events == solo.events
+        assert [e["kind"] for e in tr.events] == ["press", "press", "end_session", "explanation"]
+        first, second = tr.events[0], tr.events[1]
+        assert first["observation"] == "Same text." and first["observation_call"] is not None
+        assert (second["knob"], second["level"]) == (3, 7) and second["text"] == "Same text."
+        assert tr.events[2]["text"] == "Same text again."
+        text = fake.decode(tr.ids)
+        assert CONTINUE not in text and text.count(OBSERVE) == 2  # the call answered with its passage, no prompt
 
 
 class ThinkingFake(FakeLM):
