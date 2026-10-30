@@ -1,6 +1,7 @@
 """Batched generation. The first block needs no model (stub LM, fake tokenizer, bare tensors); the rest
 load KNOB_TEST_MODEL on the box and check every batched row against its solo run (float32, greedy
 where tokens must match exactly)."""
+import importlib.util
 import os
 import random
 import re
@@ -25,6 +26,9 @@ MODEL = os.environ.get("KNOB_TEST_MODEL", "Qwen/Qwen3-0.6B")
 DTYPE = getattr(torch, os.environ.get("KNOB_TEST_DTYPE", "float32"))
 LOOSE = DTYPE != torch.float32
 exact = pytest.mark.skipif(LOOSE, reason="token-exact batched == solo needs float32")
+# The fla Gated DeltaNet kernels (hybrid models) chunk by sequence length and use TF32, so batched and solo logits
+# differ by ~2e-3 even in float32. The torch path is exact to 1e-3 (PYTHONPATH with sys.modules["fla"] = None).
+TOL = 1e-2 if importlib.util.find_spec("fla") else 1e-3
 
 
 # -- no model --------------------------------------------------------------
@@ -474,7 +478,7 @@ def test_each_row_of_a_mixed_length_batch_equals_its_solo_run(lm):
     first, outs = lm.generate_batch(ps, scheds, 30, stop, temperature=0, first_logits=True)
     for p, s, f, out in zip(ps, scheds, first, outs):
         solo, _ = lm.score(p, s)
-        assert torch.isfinite(f).all() and torch.allclose(f, solo, atol=1e-3)
+        assert torch.isfinite(f).all() and torch.allclose(f, solo, atol=TOL)
         assert out == lm.generate(p, s, 30, stop, temperature=0)
     seeds = [11, 12, 13]
     outs = lm.generate_batch(ps, scheds, 20, stop, 0.7, episode.TOP_P, episode.TOP_K, seeds)
@@ -558,7 +562,7 @@ def test_reused_batch_with_select_and_compact_equals_fresh_generation(lm):
     first, outs = lm.generate_batch([qs[0], qs[2]], [scheds[0], scheds[2]], 16, stop, temperature=0, batch=b,
                                     first_logits=True)
     for q, s, f, out in zip([qs[0], qs[2]], [scheds[0], scheds[2]], first, outs):
-        assert torch.allclose(f, lm.score(q, s)[0], atol=1e-3)
+        assert torch.allclose(f, lm.score(q, s)[0], atol=TOL)
         assert out == lm.generate(q, s, 16, stop, temperature=0)
     with pytest.raises(AssertionError, match="covers cached tokens"):
         late = scheds[2] + [Intervention(layer, vec(lm), 0, 4)]
@@ -573,7 +577,7 @@ def test_branches_equal_one_prefill_per_branch(lm):
     tails = [lm.encode(user(READOUT.format(k=k)) + GEN) for k in (1, 2, 12)] + [lm.encode(user("Why?") + GEN)]
     stop = [lm.token_id("<|im_end|>")]
     for (logits, out), tail in zip(lm.branches(prefix, sched, tails, 12, stop, size=3), tails):
-        assert torch.allclose(logits, lm.score(prefix + tail, sched)[0], atol=1e-3)
+        assert torch.allclose(logits, lm.score(prefix + tail, sched)[0], atol=TOL)
         assert out == lm.generate(prefix + tail, sched, 12, stop, temperature=0)
 
 
@@ -599,7 +603,7 @@ def test_batched_discovery_equals_solo_discovery(lm):
         assert a["readout"] == b["readout"] and a["recall"] == b["recall"]
         assert a["choice"]["options"] == b["choice"]["options"]
         for cond in ("cached", "observer"):
-            assert max(abs(x - y) for x, y in zip(a["choice"][cond]["probs"], b["choice"][cond]["probs"])) < 1e-3
+            assert max(abs(x - y) for x, y in zip(a["choice"][cond]["probs"], b["choice"][cond]["probs"])) < TOL
 
 
 @exact

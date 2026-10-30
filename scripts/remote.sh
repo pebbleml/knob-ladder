@@ -27,7 +27,7 @@ case $cmd in
     # Gated DeltaNet kernel (pure triton, no torch upgrade). causal-conv1d only ships as source, so its build is
     # best-effort: without it the conv falls back to torch, exact but slower.
     $ssh_ "$host" 'python3 -c "import sys; assert sys.version_info >= (3, 10), sys.version" &&
-      pip install -q "transformers==5.20.2" "flash-linear-attention==0.5.2" "numpy<2" "pillow>=10" accelerate scikit-learn pytest jinja2 &&
+      pip install -q "transformers==5.20.2" "flash-linear-attention==0.5.2" "numpy<2" "pillow>=10" accelerate scikit-learn pytest "jinja2>=3.1" &&
       (timeout 1200 pip install -q --no-build-isolation "causal-conv1d==1.6.2.post1" || echo "causal-conv1d not built; torch fallback") &&
       python3 -c "import torch,transformers,importlib.util as u;print(torch.__version__,transformers.__version__,torch.cuda.get_device_name(),{m:bool(u.find_spec(m)) for m in (\"fla\",\"causal_conv1d\")})"'
     ;;
@@ -45,7 +45,7 @@ case $cmd in
     # Anyone with the link can read the episodes; `share stop` takes it down.
     sync
     if [ "${1:-}" = stop ]; then
-      $ssh_ "$host" 'pkill -f "cloudflared tunnel" || true; pkill -f "watch.py --port 8009" || true'
+      $ssh_ "$host" 'kill $(cat ~/knob-ladder/runs/share.pids 2>/dev/null) 2>/dev/null || true; rm -f ~/knob-ladder/runs/share.pids'
       exit 0
     fi
     $ssh_ "$host" 'set -e
@@ -56,13 +56,18 @@ case $cmd in
         echo "d33ff2d14475178d2012c2c56beba87389ac5ded27649519f198a7d3134a99db  $cf.tmp" | sha256sum -c --quiet
         chmod +x $cf.tmp && mv $cf.tmp $cf
       fi
-      pkill -f "cloudflared tunnel" || true; pkill -f "watch.py --port 8009" || true
+      # PIDs, not pkill -f: the command line of this very shell contains the patterns.
+      kill $(cat ~/knob-ladder/runs/share.pids 2>/dev/null) 2>/dev/null || true
+      sleep 1; rm -f ~/knob-ladder/runs/share_tunnel.log  # the old tunnel writes its exit into the log
       token=$(python3 -c "import secrets; print(secrets.token_urlsafe(24))")
       cd knob-ladder && mkdir -p runs
-      nohup python3 scripts/watch.py --port 8009 --token $token '"$*"' > runs/share_watch.log 2>&1 &
-      nohup $cf tunnel --no-autoupdate --url http://127.0.0.1:8009 > runs/share_tunnel.log 2>&1 &
+      nohup python3 scripts/watch.py --port 8009 --token $token '"$*"' > runs/share_watch.log 2>&1 < /dev/null &
+      echo $! > runs/share.pids
+      : > ~/bin/cloudflared-empty.yml  # else it reads the box config at /etc/cloudflared, whose ingress 404s us
+      nohup $cf --config ~/bin/cloudflared-empty.yml tunnel --no-autoupdate --protocol http2 --url http://127.0.0.1:8009 > runs/share_tunnel.log 2>&1 < /dev/null &
+      echo $! >> runs/share.pids
       for i in $(seq 30); do
-        url=$(grep -o "https://[a-z0-9-]*\.trycloudflare\.com" runs/share_tunnel.log | head -1 || true)
+        url=$(grep -ao "https://[a-z0-9-]*\.trycloudflare\.com" runs/share_tunnel.log | head -1 || true)
         [ -n "$url" ] && break; sleep 1
       done
       [ -n "$url" ] || { tail runs/share_tunnel.log; exit 1; }

@@ -1,4 +1,5 @@
 """Invariants the whole ladder relies on. Run: python3 -m pytest tests -q (uses Qwen3-0.6B)."""
+import importlib.util
 import os
 
 import pytest
@@ -11,6 +12,7 @@ from knobladder.text import chat_prefix
 MODEL = os.environ.get("KNOB_TEST_MODEL", "Qwen/Qwen3-0.6B")
 DTYPE = getattr(torch, os.environ.get("KNOB_TEST_DTYPE", "float32"))  # bfloat16 on the box, as in runs
 LOOSE = DTYPE != torch.float32
+TOL = 1e-2 if importlib.util.find_spec("fla") else 1e-3  # fla kernel noise; see test_batch.TOL
 
 
 @pytest.fixture(scope="module")
@@ -73,4 +75,4 @@ def test_neuron_write_vector_equals_raising_activation(lm, ids):
     d = neuron_direction(lm, layer, index) * delta
     via_vector, _ = lm.score(ids, [Intervention(layer, d, 0)])
     # In bf16 the two paths round differently (the add happens after down_proj, not inside it).
-    assert torch.allclose(via_neuron, via_vector, atol=0.5 if LOOSE else 1e-3)
+    assert torch.allclose(via_neuron, via_vector, atol=0.5 if LOOSE else TOL)
