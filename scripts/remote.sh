@@ -59,7 +59,7 @@ case $cmd in
       # PIDs, not pkill -f: the command line of this very shell contains the patterns.
       kill $(cat ~/knob-ladder/runs/share.pids 2>/dev/null) 2>/dev/null || true
       sleep 1; rm -f ~/knob-ladder/runs/share_tunnel.log  # the old tunnel writes its exit into the log
-      token=$(python3 -c "import secrets; print(secrets.token_urlsafe(24))")
+      token=$(python3 -c "import secrets; print(secrets.token_hex(16))")
       cd knob-ladder && mkdir -p runs
       nohup python3 scripts/watch.py --port 8009 --token $token '"$*"' > runs/share_watch.log 2>&1 < /dev/null &
       echo $! > runs/share.pids

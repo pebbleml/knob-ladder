@@ -416,12 +416,23 @@ def render_episode(root, run, ep):
     return page(f"{run} ep{ep:03d}", "".join(out), follow=True)
 
 
+# Appended to pages fetched with ?k=TOKEN: carry the token onto every same-site link.
+KEEP_TOKEN = """<script>(function(){var k=new URLSearchParams(location.search).get('k');if(!k)return;
+document.querySelectorAll("a[href^='/']").forEach(function(a){var u=new URL(a.href);u.searchParams.set('k',k);a.href=u;});})();</script>"""
+
+
 def make_handler(root, token=None):
-    """With a token (for a public tunnel), the first visit needs ?k=TOKEN, which sets a cookie."""
+    """With a token (for a public tunnel), a request needs ?k=TOKEN or the cookie that ?k=TOKEN sets."""
     class H(BaseHTTPRequestHandler):
+        set_cookie = False
+
         def _send(self, code, body):
+            if self.set_cookie:  # the token also rides on every link, for browsers that drop the cookie (Safari)
+                body += KEEP_TOKEN
             data = body.encode("utf-8")
             self.send_response(code)
+            if self.set_cookie:
+                self.send_header("Set-Cookie", f"k={token}; Path=/; Max-Age=2592000; HttpOnly; Secure; SameSite=Lax")
             self.send_header("Content-Type", "text/html; charset=utf-8")
             self.send_header("Content-Length", str(len(data)))
             self.send_header("Cache-Control", "no-store")
@@ -440,15 +451,9 @@ def make_handler(root, token=None):
 
         def do_GET(self):
             path = self.path.split("?", 1)[0]
-            ok, set_cookie = self._authorized()
+            ok, self.set_cookie = self._authorized()
             if not ok:
                 return self._send(403, page("forbidden", "<p>forbidden</p>"))
-            if set_cookie:  # drop the token from the address bar
-                self.send_response(303)
-                self.send_header("Set-Cookie", f"k={token}; Path=/; HttpOnly; Secure; SameSite=Lax")
-                self.send_header("Location", path or "/")
-                self.end_headers()
-                return
             try:
                 if path in ("/", ""):
                     return self._send(200, render_index(root))
