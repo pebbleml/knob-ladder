@@ -83,6 +83,8 @@ def main():
     ap.add_argument("--dtype", default="float32", choices=["float32", "bfloat16"])
     ap.add_argument("--neurons", help="R1: an atlas JSON (scripts/atlas.py); knobs become its poles at --layer, one per "
                     "concept (the most selective), dosed like concept vectors (unit direction times the dose)")
+    ap.add_argument("--chord", action="store_true", help="R2: knobs hold their levels and every press injects "
+                    "all of them (episode.Board.chord_vector)")
     ap.add_argument("--readable-only", action="store_true", help="with --neurons: only poles the atlas found readable")
     args = ap.parse_args()
 
@@ -155,7 +157,7 @@ def main():
         print(f"probe L{probe_layer} holdout acc {probe.holdout_accuracy:.2f}")
 
     shard, shards = map(int, args.shard.split("/"))
-    run_id = f"{'r1' if args.neurons else 'r0'}_{args.model.split('/')[-1]}_{time.strftime('%Y%m%d-%H%M%S')}"
+    run_id = f"{'r2' if args.chord else 'r1' if args.neurons else 'r0'}_{args.model.split('/')[-1]}_{time.strftime('%Y%m%d-%H%M%S')}"
     if shards > 1:
         run_id += f"_s{shard}of{shards}"
     out_path = ROOT / "runs" / f"{run_id}.jsonl"
@@ -163,7 +165,7 @@ def main():
     live.mkdir(parents=True, exist_ok=True)
     (live / "meta.json").write_text(json.dumps({
         "run": run_id, "model": args.model, "layer": layer, "alpha": args.alpha, "dose": dose, "window": args.window,
-        "neurons": args.neurons, "atlas_poles": atlas_poles, "steer_tokens": args.steer_tokens, "steer_reply": args.steer_reply, "thinking": args.thinking, "keep_thinking": args.keep_thinking, "hyperparams": hp, "episodes": args.episodes, "shard": args.shard, "batch": args.batch, "reuse_cache": args.reuse_cache,
+        "neurons": args.neurons, "chord": args.chord, "atlas_poles": atlas_poles, "steer_tokens": args.steer_tokens, "steer_reply": args.steer_reply, "thinking": args.thinking, "keep_thinking": args.keep_thinking, "hyperparams": hp, "episodes": args.episodes, "shard": args.shard, "batch": args.batch, "reuse_cache": args.reuse_cache,
         "started": time.time()}))
 
     def start(ep):
@@ -176,6 +178,7 @@ def main():
             random_dir=random_direction(lm.d_model, seed),
         )
         board.window, board.steer_tokens, board.steer_reply = args.window, args.steer_tokens, args.steer_reply
+        board.chord = args.chord
         log = (live / f"ep{ep:03d}.jsonl").open("a")
 
         def note(kind, **fields):
@@ -219,7 +222,7 @@ def main():
                     "provenance": prov, "readout_candidates": knob_words, "raw_norm_ratio": raw_norm,
                     "passages_version": PASSAGES_VERSION, "passage_index": e["passage_index"],
                     "layer": layer, "layer_frac": args.layer, "alpha": args.alpha, "dose": dose, "window": args.window,
-                    "neurons": args.neurons, "atlas_poles": atlas_poles, "steer_tokens": args.steer_tokens, "steer_reply": args.steer_reply, "screen": screen["path"], "calibration": str(calib_path) if calib_path else None,
+                    "neurons": args.neurons, "chord": args.chord, "atlas_poles": atlas_poles, "steer_tokens": args.steer_tokens, "steer_reply": args.steer_reply, "screen": screen["path"], "calibration": str(calib_path) if calib_path else None,
                     "board": {k: kb.label for k, kb in board.knobs.items()},
                     "events": tr.events,
                     "presses": press_counts(tr),

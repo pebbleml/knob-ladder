@@ -72,6 +72,20 @@ def test_turned_knob():
     assert turned_knob(None, board) is None
 
 
+def test_chord_board_sums_held_levels_capped_at_the_dose():
+    e = torch.eye(3)
+    board = Board({1: Knob(1, "a", e[0]), 2: Knob(2, "b", e[1]), 3: Knob(3, "sham", torch.zeros(3))}, 0, 4.0, chord=True)
+    levels = {}
+    assert torch.allclose(board.press(levels, 1, 5), torch.tensor([2.0, 0, 0]))  # one knob: as in R0
+    assert torch.allclose(board.press(levels, 2, 5), torch.tensor([2.0, 2.0, 0]))  # both held, |v| < dose
+    v = board.press(levels, 2, 10)  # |(2, 4)| > 4: scaled down to the dose
+    assert abs(float(v.norm()) - 4.0) < 1e-5 and torch.allclose(v / v.norm(), torch.tensor([1.0, 2, 0]) / 5 ** 0.5)
+    assert torch.allclose(board.press(levels, 1, 0), torch.tensor([0, 4.0, 0]))  # a knob at 0 drops out
+    assert levels == {1: 0, 2: 10}
+    plain = Board(dict(board.knobs), 0, 4.0)
+    assert torch.allclose(plain.press({1: 10}, 2, 5), torch.tensor([0, 2.0, 0]))  # R0: the pressed knob alone
+
+
 # -- with a model ----------------------------------------------------------
 @pytest.fixture(scope="module")
 def lm():

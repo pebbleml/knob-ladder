@@ -58,8 +58,13 @@ def main():
         presses = [e for e in r["events"] if e["kind"] == "press"]
         assert len(presses) == len(r["schedule"]), "one window per press (no --steer-reply runs)"
         sched = []
+        dirs["sham"] = torch.zeros(lm.d_model)
         for e, (lay, start, end) in zip(presses, r["schedule"]):
-            v = torch.zeros(lm.d_model) if e["label"] == "sham" else dirs[e["label"]] * r["dose"] * e["level"] / 10
+            if r.get("chord"):  # R2: every knob at its level, capped at the dose (episode.Board.chord_vector)
+                v = sum(dirs[r["board"][k]] * r["dose"] * lv / 10 for k, lv in e["levels"].items())
+                v = v * min(1.0, r["dose"] / max(float(v.norm()), 1e-8))
+            else:
+                v = dirs[e["label"]] * r["dose"] * e["level"] / 10
             sched.append(Intervention(lay, v, start, end))
         ids = r["ids"]
         for j, e in enumerate(presses):

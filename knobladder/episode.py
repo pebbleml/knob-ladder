@@ -151,11 +151,25 @@ class Board:
     window: str = "passage"  # or "observation": steering continues through the model's observation
     steer_tokens: Optional[int] = None  # with "observation": steer only its first n tokens (None: all of it)
     steer_reply: Optional[int] = None  # with "observation" and thinking: also steer the reply's first n tokens
+    chord: bool = False  # R2: knobs hold their levels and a press injects every knob at once (chord_vector)
 
     def vector(self, number: int, level: int = 10, sign: str = "+") -> torch.Tensor:
         """R0 always presses "+"; the sign is kept for R1 and is never shown to the model."""
         v = self.knobs[number].direction * self.dose * level / 10
         return v if sign == "+" else -v
+
+    def chord_vector(self, levels: Dict[int, int]) -> torch.Tensor:
+        """R2: the sum of every knob at its current level, scaled down to the dose if it is longer (one knob
+        at level 10 is the largest a chord can be, as in R0)."""
+        v = sum(self.knobs[k].direction * self.dose * lv / 10 for k, lv in levels.items())
+        v = v if torch.is_tensor(v) else torch.zeros_like(next(iter(self.knobs.values())).direction)
+        n = float(v.norm())
+        return v * (self.dose / n) if n > self.dose else v
+
+    def press(self, levels: Dict[int, int], knob: int, level: int) -> torch.Tensor:
+        """The vector injected when `knob` is set to `level`; `levels` (the board's state) is updated."""
+        levels[knob] = level
+        return self.chord_vector(levels) if self.chord else self.vector(knob, level)
 
     def numbers(self) -> List[int]:
         return sorted(self.knobs)
@@ -411,6 +425,7 @@ def _episode(lm: SteeredLM, board: Board, passage: str, seed: int, emit: Optiona
     opened = len(_opened(lm)) if thinking else 0  # template tokens at the start of each turn, dropped with its thinking
     passage_ids = lm.encode(passage)  # identical tokens on every press
     prompt, calls = START, 0
+    levels: Dict[int, int] = {}  # every knob's current level (a chord board injects all of them)
     pending = None  # a call made at the end of an observation: the next decision, with no new prompt
     # Room left for one more press (decision, passage, observation) and the final answer, or the session ends.
     budget = hp["max_new_tokens"] * (2 if thinking else 1)
@@ -448,7 +463,7 @@ def _episode(lm: SteeredLM, board: Board, passage: str, seed: int, emit: Optiona
         header = TURNED.format(k=knob, level=level)
         label = board.knobs[knob].label
         window = append_passage(lm, tr, header, passage_ids)
-        iv = Intervention(board.layer, board.vector(knob, level), *window)
+        iv = Intervention(board.layer, board.press(levels, knob, level), *window)
         if board.window == "observation":
             iv.end = None  # open through OBSERVE and the observation; closed once it is written
         tr.schedule.append(iv)
@@ -488,6 +503,7 @@ def _episode(lm: SteeredLM, board: Board, passage: str, seed: int, emit: Optiona
             "observation_call": answer(obs, thinking) if obs_called else None,  # the next turn's decision
             "observation_forged": obs_forged, "think_cut": obs_cut, "steered_written": written,
             "reply_steered": reply_steered, "reply_overlap": overlap,  # positions in the history the model keeps
+            "levels": {str(k): v for k, v in levels.items()} if board.chord else None,
             # the board concepts the observation names; the observer reads these words too
             "observation_hits": [c for c in board.concepts() if lexical_hits(answer(obs, thinking), c)],
         })
@@ -518,13 +534,14 @@ def yoked_transcript(lm: SteeredLM, board: Board, passage: str, tr: Transcript, 
     y.append(lm, lm.fmt.system(system_text(board.numbers()), TOOLS, hp.get("effort")))
     passage_ids = lm.encode(passage)
     prompt = START
+    levels: Dict[int, int] = {}
     for e in tr.events:
         if e["kind"] != "press":
             continue
         knob, level = e["knob"], e["level"]
         y.append(lm, user(prompt) + head + lm.fmt.tool_call("turn", {"knob": knob, "level": level}) + END)
         window = append_passage(lm, y, TURNED.format(k=knob, level=level), passage_ids)
-        iv = Intervention(board.layer, board.vector(knob, level), *window)
+        iv = Intervention(board.layer, board.press(levels, knob, level), *window)
         y.append(lm, user(OBSERVE) + head)
         if board.window == "observation":
             iv.end = len(y.ids)
