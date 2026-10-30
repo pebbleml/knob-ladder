@@ -8,6 +8,7 @@
 Reads runs/live/<run_id>/meta.json and ep000.jsonl, ep001.jsonl, ... (see r0_pilot.py).
 """
 import argparse
+import hmac
 import html
 import json
 import re
@@ -415,7 +416,8 @@ def render_episode(root, run, ep):
     return page(f"{run} ep{ep:03d}", "".join(out), follow=True)
 
 
-def make_handler(root):
+def make_handler(root, token=None):
+    """With a token (for a public tunnel), the first visit needs ?k=TOKEN, which sets a cookie."""
     class H(BaseHTTPRequestHandler):
         def _send(self, code, body):
             data = body.encode("utf-8")
@@ -426,8 +428,27 @@ def make_handler(root):
             self.end_headers()
             self.wfile.write(data)
 
+        def _authorized(self):
+            if token is None:
+                return True, False
+            query = self.path.partition("?")[2]
+            given = dict(kv.partition("=")[::2] for kv in query.split("&") if kv).get("k", "")
+            cookies = dict(c.strip().partition("=")[::2] for c in (self.headers.get("Cookie") or "").split(";") if c)
+            if hmac.compare_digest(given.encode(), token.encode()):
+                return True, True
+            return hmac.compare_digest(cookies.get("k", "").encode(), token.encode()), False
+
         def do_GET(self):
             path = self.path.split("?", 1)[0]
+            ok, set_cookie = self._authorized()
+            if not ok:
+                return self._send(403, page("forbidden", "<p>forbidden</p>"))
+            if set_cookie:  # drop the token from the address bar
+                self.send_response(303)
+                self.send_header("Set-Cookie", f"k={token}; Path=/; HttpOnly; Secure; SameSite=Lax")
+                self.send_header("Location", path or "/")
+                self.end_headers()
+                return
             try:
                 if path in ("/", ""):
                     return self._send(200, render_index(root))
@@ -455,6 +476,7 @@ def main():
     ap.add_argument("--runs", default="runs/live", help="live runs directory (default runs/live)")
     ap.add_argument("--port", type=int, default=8008)
     ap.add_argument("--blind", action="store_true", help="hide knob labels, steered tags and discovery ranks")
+    ap.add_argument("--token", help="require ?k=TOKEN on the first visit (for scripts/remote.sh share)")
     ap.add_argument("--once", nargs=2, metavar=("RUN_ID", "EP"), help="print one episode as text and exit")
     ap.add_argument("--follow", nargs=2, metavar=("RUN_ID", "EP"), help="tail one episode as text (exits on done)")
     a = ap.parse_args()
@@ -467,7 +489,7 @@ def main():
         return cmd_once(a.runs, a.once[0], int(a.once[1]))
     if a.follow:
         return cmd_follow(a.runs, a.follow[0], int(a.follow[1]))
-    srv = ThreadingHTTPServer(("127.0.0.1", a.port), make_handler(a.runs))
+    srv = ThreadingHTTPServer(("127.0.0.1", a.port), make_handler(a.runs, a.token))
     print(f"serving {a.runs} on http://127.0.0.1:{a.port}/", flush=True)
     try:
         srv.serve_forever()

@@ -5,6 +5,7 @@
 #   scripts/remote.sh ubuntu@1.2.3.4 run python3 -m pytest tests -q
 #   scripts/remote.sh ubuntu@1.2.3.4 pull        # copy runs/ back
 #   scripts/remote.sh ubuntu@1.2.3.4 watch       # live episodes at http://localhost:8008 (--blind hides labels)
+#   scripts/remote.sh ubuntu@1.2.3.4 share       # the same viewer at a secret public https link; share stop
 set -euo pipefail
 host=$1; cmd=$2; shift 2
 here=$(cd "$(dirname "$0")/.." && pwd)
@@ -38,6 +39,34 @@ case $cmd in
     sync
     echo "open http://localhost:8008"
     $ssh_ -t -L 8008:localhost:8008 "$host" "cd knob-ladder && python3 scripts/watch.py --port 8008 $*"
+    ;;
+  share)
+    # The live viewer at a public https URL (Cloudflare quick tunnel), gated by a random token in the link.
+    # Anyone with the link can read the episodes; `share stop` takes it down.
+    sync
+    if [ "${1:-}" = stop ]; then
+      $ssh_ "$host" 'pkill -f "cloudflared tunnel" || true; pkill -f "watch.py --port 8009" || true'
+      exit 0
+    fi
+    $ssh_ "$host" 'set -e
+      cf=~/bin/cloudflared
+      if [ ! -x $cf ]; then
+        mkdir -p ~/bin
+        curl -sSL -o $cf.tmp https://github.com/cloudflare/cloudflared/releases/download/2026.10.0/cloudflared-linux-amd64
+        echo "d33ff2d14475178d2012c2c56beba87389ac5ded27649519f198a7d3134a99db  $cf.tmp" | sha256sum -c --quiet
+        chmod +x $cf.tmp && mv $cf.tmp $cf
+      fi
+      pkill -f "cloudflared tunnel" || true; pkill -f "watch.py --port 8009" || true
+      token=$(python3 -c "import secrets; print(secrets.token_urlsafe(24))")
+      cd knob-ladder && mkdir -p runs
+      nohup python3 scripts/watch.py --port 8009 --token $token '"$*"' > runs/share_watch.log 2>&1 &
+      nohup $cf tunnel --no-autoupdate --url http://127.0.0.1:8009 > runs/share_tunnel.log 2>&1 &
+      for i in $(seq 30); do
+        url=$(grep -o "https://[a-z0-9-]*\.trycloudflare\.com" runs/share_tunnel.log | head -1 || true)
+        [ -n "$url" ] && break; sleep 1
+      done
+      [ -n "$url" ] || { tail runs/share_tunnel.log; exit 1; }
+      echo "$url/?k=$token"'
     ;;
   pull)
     rsync -az -e "$ssh_" "$host:knob-ladder/runs/" "$here/runs/"
