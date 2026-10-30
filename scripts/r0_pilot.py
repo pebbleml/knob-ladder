@@ -85,14 +85,16 @@ def main():
     screen = load_screen(args.screen, args.model)
     calib_path = None
     if args.calibration:
-        mode = "open" if args.window == "observation" else "silent"
-        prefix = "calibrate_open_" if mode == "open" else "calibrate_"
+        # an observation window bounded by --steer-tokens is calibrated on what the model writes (calibrate_gen.py)
+        mode = "silent" if args.window == "passage" else "gen" if args.steer_tokens else "open"
+        prefix = {"silent": "calibrate_", "open": "calibrate_open_", "gen": "calibrate_gen_"}[mode]
         calib_path = resolve_run(args.calibration, f"{prefix}{args.model.split('/')[-1]}_*.json")
         calib = json.loads(calib_path.read_text())
         # 'latest' resolves each file on its own; make sure they belong together.
         assert Path(calib["screen"]).resolve() == Path(screen["path"]).resolve(), \
             f"{calib_path} was calibrated on {calib['screen']}, not {screen['path']}"
         assert calib["model"] == args.model and calib["mode"] == mode, (calib["model"], calib["mode"])
+        assert mode != "gen" or calib["steer_tokens"] == args.steer_tokens, (calib["steer_tokens"], args.steer_tokens)
         assert calib["passages_version"] == screen["passages_version"] == PASSAGES_VERSION
         best = calib["best"]
         assert best is not None, f"{calib_path} has no best (layer, alpha)"

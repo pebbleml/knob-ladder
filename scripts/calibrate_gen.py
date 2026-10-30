@@ -163,7 +163,7 @@ def main():
     out = ROOT / "runs" / f"calibrate_gen_{args.model.split('/')[-1]}_{time.strftime('%Y%m%d-%H%M%S')}.json"
     out.parent.mkdir(exist_ok=True)
     out.write_text(json.dumps({
-        "model": args.model, "screen": screen["path"], "passages_version": PASSAGES_VERSION,
+        "model": args.model, "mode": "gen", "screen": screen["path"], "passages_version": PASSAGES_VERSION,
         "provenance": lm.provenance(), "select_passages": SELECT, "steer_tokens": args.steer_tokens,
         "max_new": args.max_new, "hyperparams": hp, "concepts": words, "max_dnll": args.max_dnll,
         "baseline": {**base, "rows": base_rows}, "cells": cells, "best": best,
