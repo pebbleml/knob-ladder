@@ -20,7 +20,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 from knobladder.episode import OBSERVE  # noqa: E402
-from knobladder.knobs import CONCEPTS, concept_vectors, random_direction, unit  # noqa: E402
+from knobladder.knobs import CONCEPTS, concept_vectors, neuron_direction, random_direction, unit  # noqa: E402
 from knobladder.model import Intervention, SteeredLM  # noqa: E402
 from knobladder.readout import QUESTION, first_tokens, ranks  # noqa: E402
 from knobladder.stats import chance_mrr, mean  # noqa: E402
@@ -51,7 +51,9 @@ def main():
 
     out = []
     for r in rows:
-        dirs = {lab: unit(vectors[lab]) for lab in r["board"].values() if lab not in ("random", "sham")}
+        poles = r.get("atlas_poles")  # R1 runs: knobs are neurons (r0_pilot --neurons)
+        dirs = {lab: unit(neuron_direction(lm, poles[lab]["layer"], poles[lab]["index"]) * poles[lab]["sign"] if poles
+                          else vectors[lab]) for lab in r["board"].values() if lab not in ("random", "sham")}
         dirs["random"] = unit(random_direction(lm.d_model, r["seed"]))
         presses = [e for e in r["events"] if e["kind"] == "press"]
         assert len(presses) == len(r["schedule"]), "one window per press (no --steer-reply runs)"
