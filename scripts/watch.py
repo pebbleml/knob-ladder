@@ -211,39 +211,71 @@ def cmd_follow(root, run, ep):
 # ---------------------------------------------------------------- html
 
 CSS = """
-:root{--bg:#fafafa;--fg:#1a1a1a;--dim:#666;--line:#ccc;--sys:#eee;--user:#dbeafe;--asst:#dcfce7;
+:root{color-scheme:light dark;--bg:#fafafa;--fg:#1a1a1a;--dim:#666;--line:#ccc;--sys:#eee;--user:#dbeafe;--asst:#dcfce7;
 --tool:#f3f4f6;--steer:#fef3c7;--steerb:#d97706;--link:#1d4ed8;--ok:#15803d;--run:#b45309}
 @media (prefers-color-scheme: dark){:root{--bg:#14161a;--fg:#e4e4e7;--dim:#9a9aa3;--line:#3a3d44;
 --sys:#23262c;--user:#1e3a5f;--asst:#14391f;--tool:#22252b;--steer:#4a3a0e;--steerb:#f59e0b;
 --link:#7cb0ff;--ok:#4ade80;--run:#fbbf24}}
-body{background:var(--bg);color:var(--fg);font:14px/1.45 ui-monospace,Menlo,Consolas,monospace;
-margin:0 auto;max-width:1000px;padding:12px}
-a{color:var(--link)} h1,h2{font-size:16px;margin:12px 0 6px} .dim{color:var(--dim)}
-table{border-collapse:collapse;width:100%} td,th{border:1px solid var(--line);padding:3px 6px;
-text-align:left;vertical-align:top}
-pre{margin:0;white-space:pre-wrap;word-break:break-word;font:inherit}
+html{-webkit-text-size-adjust:100%}
+body{background:var(--bg);color:var(--fg);font:16px/1.45 ui-monospace,Menlo,Consolas,monospace;
+margin:0 auto;max-width:1000px;padding:12px;overflow-wrap:anywhere;overflow-anchor:none}
+a{color:var(--link)} h1{font-size:20px;margin:12px 0 6px} h2{font-size:17px;margin:14px 0 6px} .dim{color:var(--dim)}
+.tw{overflow-x:auto;-webkit-overflow-scrolling:touch;max-width:100%}
+table{border-collapse:collapse;width:100%} td,th{border:1px solid var(--line);padding:4px 7px;
+text-align:left;vertical-align:top;overflow-wrap:break-word}
+.wide{min-width:760px}
+pre{margin:0;white-space:pre-wrap;overflow-wrap:anywhere;font:inherit}
 .msg{border:1px solid var(--line);border-radius:4px;margin:8px 0;padding:6px 8px}
-.msg .hd{font-weight:bold;font-size:12px;margin-bottom:4px}
+.msg .hd{font-weight:bold;font-size:14px;margin-bottom:4px}
 .system{background:var(--sys)} .user{background:var(--user)} .assistant{background:var(--asst)}
 .tool{background:var(--tool)} .steered{background:var(--steer);border:2px solid var(--steerb)}
 .ok{color:var(--ok)} .run{color:var(--run)}
 .board td{text-align:center}
 .think{border-left:3px solid var(--line);padding:2px 8px;margin:4px 0 6px;opacity:.85}
-.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(420px,1fr));gap:10px;margin-top:8px}
+.nav{line-height:2.2} .nav a,td a,h2 a{display:inline-block;padding:8px 4px}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(min(420px,100%),1fr));gap:10px;margin-top:8px}
 .card{border:1px solid var(--line);border-radius:4px;padding:6px 8px;min-width:0}
 .card>.hd{font-weight:bold;margin-bottom:2px} .card .msg pre{max-height:14em;overflow:auto}
 body:has(.grid){max-width:none}
+@media (max-width:700px){
+body{padding:10px}
+.grid{grid-template-columns:minmax(0,1fr)}
+.card .msg pre{max-height:none;overflow:visible}
+}
 """
 
-# keep the scroll position across the meta refresh; if we were at the bottom, follow the bottom
+# Auto-refresh without a reload: every 3s fetch this same URL (pathname + search, so the ?k= token rides along even
+# when Safari drops the cookie), and if #app changed swap it in. The reading position is kept: pinned to the bottom
+# if we were at the bottom, else the same scrollY. Skipped while a finger is down, shortly after scrolling (iOS
+# momentum), while text is selected, and while the tab is hidden. Links in the new HTML get the ?k= token again.
 JS = """
-(function(){var k='scroll:'+location.pathname;
-function save(){try{var d=document.documentElement;
-sessionStorage.setItem(k,JSON.stringify({y:scrollY,b:innerHeight+scrollY>=d.scrollHeight-40}))}catch(e){}}
-addEventListener('scroll',save);
-try{var s=JSON.parse(sessionStorage.getItem(k)||'null');
-if(s){scrollTo(0,s.b?document.documentElement.scrollHeight:s.y)}
-else if(document.body.dataset.follow){scrollTo(0,document.documentElement.scrollHeight)}}catch(e){}
+(function(){var app=document.getElementById('app');if(!app||!window.fetch)return;
+var de=document.documentElement,last=app.innerHTML,touching=0,lastScroll=0,ignoreUntil=0,busy=false;
+function atBottom(){return innerHeight+scrollY>=de.scrollHeight-40}
+function toBottom(){ignoreUntil=Date.now()+150;scrollTo(0,de.scrollHeight)}
+function settled(){return !touching&&Date.now()-lastScroll>1500}
+function selecting(){try{var s=getSelection();return !!s&&!s.isCollapsed&&String(s).length>0}catch(e){return false}}
+function keepToken(root){var k=new URLSearchParams(location.search).get('k');if(!k)return;
+root.querySelectorAll("a[href^='/']").forEach(function(a){var u=new URL(a.href);u.searchParams.set('k',k);a.href=u;});}
+addEventListener('scroll',function(){if(Date.now()>ignoreUntil)lastScroll=Date.now()},{passive:true});
+['touchstart','touchend','touchcancel'].forEach(function(n){addEventListener(n,function(e){
+touching=e.touches.length;if(!touching)lastScroll=Date.now()},{passive:true})});
+if(document.body.dataset.follow)toBottom();
+function swap(n,title){var y=scrollY,b=atBottom(),h=app.offsetHeight;
+var sl=[].map.call(app.querySelectorAll('.tw'),function(e){return e.scrollLeft});
+app.style.minHeight=h+'px';app.innerHTML=n.innerHTML;last=n.innerHTML;
+if(title)document.title=title;
+keepToken(app);
+[].forEach.call(app.querySelectorAll('.tw'),function(e,i){if(sl[i])e.scrollLeft=sl[i]});
+app.style.minHeight='';
+var ty=b?de.scrollHeight:y;if(Math.abs(scrollY-ty)>1){ignoreUntil=Date.now()+150;scrollTo(0,ty)}}
+function tick(){if(busy||document.hidden||!settled()||selecting())return;busy=true;
+fetch(location.pathname+location.search,{cache:'no-store',credentials:'same-origin'})
+.then(function(r){return r.ok?r.text():null}).then(function(t){if(t==null)return;
+var d=new DOMParser().parseFromString(t,'text/html'),n=d.getElementById('app');
+if(!n||n.innerHTML===last||!settled()||selecting())return;swap(n,d.title)})
+.catch(function(){}).then(function(){busy=false})}
+setInterval(tick,3000);
 })();
 """
 
@@ -256,9 +288,9 @@ def page(title, body, follow=False):
     return (
         "<!doctype html><html><head><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
-        "<meta http-equiv='refresh' content='3'>"
+        "<noscript><meta http-equiv='refresh' content='3'></noscript>"  # no JS: plain reload (loses scroll)
         f"<title>{esc(title)}</title><style>{CSS}</style></head>"
-        f"<body{' data-follow=1' if follow else ''}>{body}<script>{JS}</script></body></html>"
+        f"<body{' data-follow=1' if follow else ''}><div id=app>{body}</div><script>{JS}</script></body></html>"
     )
 
 
@@ -293,7 +325,7 @@ def render_running(root):
            "</span></h2>"]
     if not live:
         return out + ["<p class=dim>nothing running</p>"]
-    out.append("<table><tr><th>run</th><th>model</th><th>window</th><th>episode</th><th>presses</th>"
+    out.append("<div class=tw><table class=wide><tr><th>run</th><th>model</th><th>window</th><th>episode</th><th>presses</th>"
                "<th>last message</th><th>latest</th></tr>")
     for name, meta, ep, events, s in live:
         e = last_msg(events)
@@ -301,12 +333,12 @@ def render_running(root):
             f"<tr><td>{esc(name)}</td><td>{esc(meta.get('model', '?'))}</td><td>{esc(meta.get('window', '-'))}</td>"
             f"<td><a href='/run/{quote(name)}/{ep}'>ep{ep:03d}</a></td><td>{s['presses']}</td>"
             f"<td>{esc(ago(s['last']))}</td><td>{esc(msg_head(e))}: {esc((e or {}).get('text', '')[:140])}</td></tr>")
-    return out + ["</table>"]
+    return out + ["</table></div>"]
 
 
 def render_now(root, tail=6):
     live = running(root)
-    out = ["<div><a href='/'>&larr; runs</a> &middot; <b>running now</b> &middot; "
+    out = ["<div class=nav><a href='/'>&larr; runs</a> &middot; <b>running now</b> &middot; "
            f"{len(live)} episodes &middot; last {tail} messages each</div><div class=grid>"]
     for name, meta, ep, events, s in live:
         board = next((e for e in events if e.get("type") == "board"), None)
@@ -335,14 +367,14 @@ def render_index(root):
         started = time.strftime("%Y-%m-%d %H:%M:%S", time.localtime(meta["started"])) if isinstance(
             meta.get("started"), (int, float)) else "?"
         out.append(f"<h2>{esc(name)}</h2><div class=dim>started {esc(started)} &middot; {mline or 'no meta.json'}</div>")
-        out.append("<table><tr><th>episode</th><th>status</th><th>presses</th><th>events</th><th>last message</th></tr>")
+        out.append("<div class=tw><table><tr><th>episode</th><th>status</th><th>presses</th><th>events</th><th>last message</th></tr>")
         for ep in eps:
             s = summarize(read_events(ep_path(d, ep)))
             st = "<span class=ok>done</span>" if s["done"] else "<span class=run>running</span>"
             out.append(
                 f"<tr><td><a href='/run/{quote(name)}/{ep}'>ep{ep:03d}</a></td><td>{st}</td>"
                 f"<td>{s['presses']}</td><td>{s['n']}</td><td>{esc(ago(s['last']))}</td></tr>")
-        out.append("</table>")
+        out.append("</table></div>")
         if not eps:
             out.append("<p class=dim>no episodes yet</p>")
     return page("knob-ladder runs", "".join(out))
@@ -370,7 +402,7 @@ def render_msg(e, t0):
 
 
 def render_discovery(e):
-    out = ["<h2>Discovery</h2><table><tr><th>knob</th><th>label</th><th>presses</th>"
+    out = ["<h2>Discovery</h2><div class=tw><table class=wide><tr><th>knob</th><th>label</th><th>presses</th>"
            "<th>cached recall</th><th>observer recall</th><th>cached readout</th><th>observer readout</th></tr>"]
     for r in e.get("rows") or []:
         rec = r.get("recall") or {}
@@ -379,7 +411,7 @@ def render_discovery(e):
             f"<tr><td>{esc(r.get('knob'))}</td><td>{esc(label_of(r))}</td><td>{esc(r.get('presses'))}</td>"
             f"<td><pre>{esc(rec.get('cached', ''))}</pre></td><td><pre>{esc(rec.get('observer', ''))}</pre></td>"
             f"<td>{esc(readout_str(ro.get('cached')))}</td><td>{esc(readout_str(ro.get('observer')))}</td></tr>")
-    out.append("</table>")
+    out.append("</table></div>")
     return "".join(out)
 
 
@@ -395,14 +427,14 @@ def render_episode(root, run, ep):
     st = "<span class=ok>done</span>" if s["done"] else "<span class=run>running</span>"
     nav = "".join(f" &middot; <a href='/run/{quote(run)}/{n}'>{'prev' if n < ep else 'next'}</a>"
                   for n in (ep - 1, ep + 1) if n >= 0 and ep_path(d, n).exists())
-    out = [f"<div><a href='/'>&larr; runs</a> &middot; <b>{esc(run)}</b> ep{ep:03d} &middot; {st} &middot; "
+    out = [f"<div class=nav><a href='/'>&larr; runs</a> &middot; <b>{esc(run)}</b> ep{ep:03d} &middot; {st} &middot; "
            f"{s['presses']} presses &middot; last message {esc(ago(s['last']))}{nav}</div>"]
     if board and not BLIND:
         b = board.get("board") or {}
         keys = sorted(b, key=knob_key)
         out.append(f"<h2>Board <span class=dim>(passage_index {esc(board.get('passage_index'))})</span></h2>"
-                   "<table class=board><tr>" + "".join(f"<th>knob {esc(k)}</th>" for k in keys)
-                   + "</tr><tr>" + "".join(f"<td>{esc(b[k])}</td>" for k in keys) + "</tr></table>")
+                   "<div class=tw><table class=board><tr>" + "".join(f"<th>knob {esc(k)}</th>" for k in keys)
+                   + "</tr><tr>" + "".join(f"<td>{esc(b[k])}</td>" for k in keys) + "</tr></table></div>")
     for e in events:
         typ = e.get("type")
         if typ == "msg":
