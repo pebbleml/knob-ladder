@@ -52,8 +52,9 @@ def main():
     out = []
     for r in rows:
         poles = r.get("atlas_poles")  # R1 runs: knobs are neurons (r0_pilot --neurons)
-        dirs = {lab: unit(neuron_direction(lm, poles[lab]["layer"], poles[lab]["index"]) * poles[lab]["sign"] if poles
-                          else vectors[lab]) for lab in r["board"].values() if lab not in ("random", "sham")}
+        pole = lambda n: unit(neuron_direction(lm, n["layer"], n["index"]) * n["sign"])
+        dirs = {lab: unit(vectors[lab] if not poles else sum(map(pole, poles[lab])) if isinstance(poles[lab], list)
+                          else pole(poles[lab])) for lab in r["board"].values() if lab not in ("random", "sham")}
         dirs["random"] = unit(random_direction(lm.d_model, r["seed"]))
         presses = [e for e in r["events"] if e["kind"] == "press"]
         assert len(presses) == len(r["schedule"]), "one window per press (no --steer-reply runs)"

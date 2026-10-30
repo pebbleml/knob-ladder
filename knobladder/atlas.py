@@ -156,3 +156,9 @@ def top_poles(acts: Dict[int, torch.Tensor], words: Sequence[str], k: int = 3) -
         for w in words:
             out += sorted((n for n in cand.values() if n["word"] == w), key=lambda n: -n["z_min"])[:k]
     return out
+
+
+def bundle_direction(lm: SteeredLM, poles: List[Dict]) -> torch.Tensor:
+    """A neuron bundle: the sum of its poles' unit write directions (the R1 fallback when single neurons don't read)."""
+    from .knobs import unit
+    return sum(unit(direction(lm, n)) for n in poles)

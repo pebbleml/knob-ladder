@@ -86,6 +86,8 @@ def main():
     ap.add_argument("--chord", action="store_true", help="R2: knobs hold their levels and every press injects "
                     "all of them (episode.Board.chord_vector)")
     ap.add_argument("--readable-only", action="store_true", help="with --neurons: only poles the atlas found readable")
+    ap.add_argument("--bundle", action="store_true", help="with --neurons: each knob is the sum of its concept's atlas "
+                    "poles at --layer (unit directions, summed; the R1 fallback)")
     args = ap.parse_args()
 
     lex = lexical_screen(EPISODE_PASSAGES + fixed_texts(args.knobs + 2) + template_texts())
@@ -134,9 +136,15 @@ def main():
                 poles[n["word"]] = n
         assert len(poles) >= args.knobs, f"{len(poles)} poles at layer {layer} in {args.neurons}, need {args.knobs}"
         knob_words = sorted(poles)
-        vectors = {w: direction(lm, poles[w]) for w in knob_words}
-        atlas_poles = {w: {k: poles[w][k] for k in ("layer", "index", "sign", "z_min", "a_nat", "readable_dose")}
-                       for w in knob_words}
+        keys = ("layer", "index", "sign", "z_min", "a_nat", "readable_dose")
+        if args.bundle:
+            from knobladder.atlas import bundle_direction
+            members = {w: [n for n in atlas["neurons"] if n["layer"] == layer and n["word"] == w] for w in knob_words}
+            vectors = {w: bundle_direction(lm, members[w]) for w in knob_words}
+            atlas_poles = {w: [{k: n[k] for k in keys} for n in members[w]] for w in knob_words}
+        else:
+            vectors = {w: direction(lm, poles[w]) for w in knob_words}
+            atlas_poles = {w: {k: poles[w][k] for k in keys} for w in knob_words}
     scale = residual_scale(lm, layer)
     dose = args.alpha * scale
     firsts = first_tokens(lm, knob_words)  # readout candidates; the model never sees them
@@ -157,7 +165,7 @@ def main():
         print(f"probe L{probe_layer} holdout acc {probe.holdout_accuracy:.2f}")
 
     shard, shards = map(int, args.shard.split("/"))
-    run_id = f"{'r2' if args.chord else 'r1' if args.neurons else 'r0'}_{args.model.split('/')[-1]}_{time.strftime('%Y%m%d-%H%M%S')}"
+    run_id = f"{'r2' if args.chord else 'r1b' if args.bundle else 'r1' if args.neurons else 'r0'}_{args.model.split('/')[-1]}_{time.strftime('%Y%m%d-%H%M%S')}"
     if shards > 1:
         run_id += f"_s{shard}of{shards}"
     out_path = ROOT / "runs" / f"{run_id}.jsonl"
@@ -165,7 +173,7 @@ def main():
     live.mkdir(parents=True, exist_ok=True)
     (live / "meta.json").write_text(json.dumps({
         "run": run_id, "model": args.model, "layer": layer, "alpha": args.alpha, "dose": dose, "window": args.window,
-        "neurons": args.neurons, "chord": args.chord, "atlas_poles": atlas_poles, "steer_tokens": args.steer_tokens, "steer_reply": args.steer_reply, "thinking": args.thinking, "keep_thinking": args.keep_thinking, "hyperparams": hp, "episodes": args.episodes, "shard": args.shard, "batch": args.batch, "reuse_cache": args.reuse_cache,
+        "neurons": args.neurons, "bundle": args.bundle, "chord": args.chord, "atlas_poles": atlas_poles, "steer_tokens": args.steer_tokens, "steer_reply": args.steer_reply, "thinking": args.thinking, "keep_thinking": args.keep_thinking, "hyperparams": hp, "episodes": args.episodes, "shard": args.shard, "batch": args.batch, "reuse_cache": args.reuse_cache,
         "started": time.time()}))
 
     def start(ep):
@@ -222,7 +230,7 @@ def main():
                     "provenance": prov, "readout_candidates": knob_words, "raw_norm_ratio": raw_norm,
                     "passages_version": PASSAGES_VERSION, "passage_index": e["passage_index"],
                     "layer": layer, "layer_frac": args.layer, "alpha": args.alpha, "dose": dose, "window": args.window,
-                    "neurons": args.neurons, "chord": args.chord, "atlas_poles": atlas_poles, "steer_tokens": args.steer_tokens, "steer_reply": args.steer_reply, "screen": screen["path"], "calibration": str(calib_path) if calib_path else None,
+                    "neurons": args.neurons, "bundle": args.bundle, "chord": args.chord, "atlas_poles": atlas_poles, "steer_tokens": args.steer_tokens, "steer_reply": args.steer_reply, "screen": screen["path"], "calibration": str(calib_path) if calib_path else None,
                     "board": {k: kb.label for k, kb in board.knobs.items()},
                     "events": tr.events,
                     "presses": press_counts(tr),
