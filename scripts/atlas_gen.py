@@ -19,6 +19,11 @@ generated tokens, the observation sampled with thinking. Fixed before any neuron
    > 0 with dNLL <= --max-dnll; `readable_dose` is "f0.5" when readable there (the dose episodes use).
 5. Labels: each pole's top activations in --corpus and their concept hit rate, kept for auto-interp.
 
+--pool natural (atlas v2, after v1's template poles turned out to fire on hyphens and dates) picks poles by natural
+text instead: --paragraphs model-written paragraphs per concept, one per genre (atlas.concept_paragraphs, cached in
+runs/corpus), plus background windows of --corpus; per layer and concept the --k poles whose top-20 max activations
+fall most on that concept's paragraphs (atlas.natural_poles, `hit`). Everything after selection is unchanged.
+
 Only calibration passages are used, so nothing here is tuned on an episode passage.
 """
 from __future__ import annotations
@@ -34,7 +39,9 @@ import torch
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from knobladder.atlas import context_hit_rate, direction, template_acts, top_contexts, top_poles  # noqa: E402
+from knobladder.atlas import (  # noqa: E402
+    concept_paragraphs, context_hit_rate, direction, natural_poles, template_acts, top_contexts, top_poles,
+)
 from knobladder.episode import (  # noqa: E402
     OBSERVE, START, TOOLS, TURNED, Transcript, _stops, append_passage, answer, hyperparams, system_text,
 )
@@ -66,6 +73,8 @@ def main():
     ap.add_argument("--corpus-tokens", type=int, default=200_000)
     ap.add_argument("--batch", type=int, default=32)
     ap.add_argument("--limit", type=int, default=0, help="keep only this many poles (smoke tests)")
+    ap.add_argument("--pool", default="template", choices=["template", "natural"])
+    ap.add_argument("--paragraphs", type=int, default=24)
     args = ap.parse_args()
 
     t0 = time.time()
@@ -77,16 +86,32 @@ def main():
     layers = [int(float(f) * lm.n_layers) for f in args.layers.split(",")]
     fracs = [float(f) for f in args.fracs.split(",")]
 
-    poles = top_poles(template_acts(lm, words, layers), words, args.k)
+    text = Path(args.corpus).read_text()
+    paragraphs = None
+    if args.pool == "template":
+        poles = top_poles(template_acts(lm, words, layers), words, args.k)
+    else:
+        cache = ROOT / "runs" / "corpus" / f"concept_paragraphs_{args.model.split('/')[-1]}_n{args.paragraphs}.json"
+        if cache.exists() and set(json.loads(cache.read_text())) == set(words):
+            paragraphs = json.loads(cache.read_text())
+        else:
+            paragraphs = concept_paragraphs(lm, words, args.paragraphs, batch=args.batch)
+            cache.write_text(json.dumps(paragraphs, indent=1))
+        print(f"{sum(map(len, paragraphs.values()))} concept paragraphs; e.g. {paragraphs[words[0]][0][:200]!r} "
+              f"({time.time() - t0:.0f}s)", flush=True)
+        poles = natural_poles(lm, paragraphs, layers, text, args.k)
+        print(f"natural hit rate median {sorted(n['hit'] for n in poles)[len(poles) // 2]:.2f}, share >= 0.5 "
+              f"{mean([float(n['hit'] >= 0.5) for n in poles]):.2f} ({time.time() - t0:.0f}s)", flush=True)
     if args.limit:
         poles = poles[:args.limit]
     print(f"{len(poles)} poles ({args.k} per concept, {len(words)} concepts, layers {layers}); z_min median "
           f"{sorted(n['z_min'] for n in poles)[len(poles) // 2]:.2f} ({time.time() - t0:.0f}s)", flush=True)
-    text = Path(args.corpus).read_text()
     for n, ctx in zip(poles, top_contexts(lm, poles, text, max_tokens=args.corpus_tokens)):
         n["contexts"], n["context_hit_rate"] = ctx, context_hit_rate(ctx, n["word"])
 
     cvecs = concept_vectors_at(lm, words, layers)
+    for n in poles:
+        n["cos_concept"] = float(unit(direction(lm, n).float().cpu()) @ unit(cvecs[n["layer"]][n["word"]].float().cpu()))
     scales = {l: residual_scale(lm, l) for l in layers}
     prompts = []
     for p in CALIB_PASSAGES:
@@ -179,17 +204,19 @@ def main():
               f"{s['neuron_minus_random_ci'][1]:+.3f}] | neuron-concept {s['neuron_minus_concept']:+.3f} | concept "
               f"{s['concept_spec']:+.3f} random {s['random_spec']:+.3f} | readable {s['readable']}/{s['poles']} "
               f"({s['words_with_readable_pole']} concepts; z>=2: {s['readable_z_ge_2']}/{s['poles_z_ge_2']})", flush=True)
-    for n in sorted(poles, key=lambda n: -n["cells"]["f0.5"]["spec"])[:25]:
-        c = n["cells"]["f0.5"]
+    for n in sorted(poles, key=lambda n: -n["cells"][f"f{fracs[0]}"]["spec"])[:25]:
+        c = n["cells"][f"f{fracs[0]}"]
         print(f"  L{n['layer']} n{n['index']} {'+' if n['sign'] > 0 else '-'} {n['word']:11s} z {n['z_min']:.2f} "
               f"own {c['own']:.2f} spec {c['spec']:+.3f} reply {c['spec_reply']:+.3f} dNLL {c['dnll']:+.2f} | "
-              f"concept {controls[n['layer'], n['word'], 0.5, 'concept']['spec']:+.3f} | ctx hit {n['context_hit_rate']:.2f}",
+              f"concept {controls[n['layer'], n['word'], fracs[0], 'concept']['spec']:+.3f} | ctx hit {n['context_hit_rate']:.2f}"
+              f" hit {n.get('hit', float('nan')):.2f} cos {n['cos_concept']:+.2f}",
               flush=True)
 
     out = ROOT / "runs" / f"atlas_{args.model.split('/')[-1]}_{time.strftime('%Y%m%d-%H%M%S')}.json"
     out.write_text(json.dumps({
         "model": args.model, "mode": "gen", "provenance": lm.provenance(), "passages_version": PASSAGES_VERSION,
-        "screen": screen["path"], "layers": layers, "residual_scale": scales, "words": words, "k": args.k,
+        "screen": screen["path"], "pool": args.pool, "paragraphs": paragraphs, "layers": layers, "residual_scale": scales,
+        "words": words, "k": args.k,
         "doses": [f"f{f}" for f in fracs], "steer_tokens": args.steer_tokens, "max_new": args.max_new,
         "hyperparams": hp, "readable": args.readable, "max_dnll": args.max_dnll, "corpus": args.corpus,
         "baseline": base, "summary": summary,

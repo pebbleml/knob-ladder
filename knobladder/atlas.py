@@ -162,3 +162,82 @@ def bundle_direction(lm: SteeredLM, poles: List[Dict]) -> torch.Tensor:
     """A neuron bundle: the sum of its poles' unit write directions (the R1 fallback when single neurons don't read)."""
     from .knobs import unit
     return sum(unit(direction(lm, n)) for n in poles)
+
+
+GENRES = [
+    "a children's story", "a news report", "a recipe or how-to note", "a travel diary entry", "a science explainer",
+    "a short dialogue between two friends", "a product review", "a prose poem", "a history note", "a text message",
+    "an encyclopedia entry", "a joke", "a letter to a grandparent", "a museum label", "a weather report",
+    "a classroom lesson", "a shopping list with comments", "a mystery novel scene", "a sports commentary",
+    "a gardening tip", "a dream someone describes", "a nature documentary narration", "an advertisement",
+    "a diary entry from a sailor",
+]
+PARAGRAPH = ("Write one short paragraph, three or four sentences, in the form of {genre}, in which {word} plays a part. "
+             "Write only the paragraph.")
+
+
+@torch.no_grad()
+def concept_paragraphs(lm: SteeredLM, words: Sequence[str], n: int, seed: int = 0, batch: int = 32) -> Dict[str, List[str]]:
+    """n short model-written paragraphs per concept, one per genre, for picking neurons by natural text."""
+    from .text import GEN, user
+    jobs = [(w, g) for w in words for g in GENRES[:n]]
+    stop = [lm.token_id("<|im_end|>")]
+    out: Dict[str, List[str]] = {w: [] for w in words}
+    for lo in range(0, len(jobs), batch):
+        chunk = jobs[lo:lo + batch]
+        ids = [lm.encode(user(PARAGRAPH.format(genre=g, word=w)) + GEN) for w, g in chunk]
+        seeds = [seed + 7919 * words.index(w) + GENRES.index(g) for w, g in chunk]
+        outs = lm.generate_batch(ids, [[] for _ in chunk], 160, stop, temperature=0.8, seeds=seeds)
+        for (w, _), o in zip(chunk, outs):
+            out[w].append(lm.tok.decode([t for t in o if t not in stop]).strip())
+    return out
+
+
+@torch.no_grad()
+def natural_poles(lm: SteeredLM, paragraphs: Dict[str, List[str]], layers: Sequence[int], background: str,
+                  k: int = 2, top: int = 20, background_tokens: int = 50_000, chunk: int = 256) -> List[Dict]:
+    """Per layer and concept, the k poles whose strongest natural-text activations fall on that concept's paragraphs.
+
+    Items are the concept paragraphs plus `chunk`-token windows of `background` text; each item's value for a pole
+    is the pole's max activation over its tokens. A pole's hit rate for concept w is the share of its `top` items
+    that are w's paragraphs (max-activation auto-interp, scored). Poles are ranked by hit rate, then by z: the gap
+    between w's paragraph maxes and the other concepts' over their sd. A neuron is kept once, for its best concept."""
+    words = list(paragraphs)
+    texts, owner = [], []
+    for w in words:
+        texts += paragraphs[w]
+        owner += [words.index(w)] * len(paragraphs[w])
+    bg = lm.encode(background)[:background_tokens]
+    items = [lm.encode(t) for t in texts] + [bg[lo:lo + chunk] for lo in range(0, len(bg), chunk)]
+    owner = torch.tensor(owner + [-1] * (len(items) - len(texts)))
+    tap = MLPTap(lm, layers)
+    mx = {l: [] for l in layers}
+    try:
+        for ids in items:
+            lm.score(ids)
+            for l, a in tap.take().items():
+                mx[l].append(torch.stack([a.max(0).values, (-a).max(0).values]))  # (2, d_ff)
+    finally:
+        tap.close()
+    out = []
+    for l in layers:
+        m = torch.stack(mx[l], 1)  # (2 signs, items, d_ff)
+        cand = {}
+        for s, sign in enumerate((1, -1)):
+            idx = m[s].topk(top, dim=0).indices  # (top, d_ff)
+            own = owner[idx]  # (top, d_ff)
+            par = m[s][owner >= 0]
+            po = owner[owner >= 0]
+            for wi, w in enumerate(words):
+                hit = (own == wi).float().mean(0)  # (d_ff,)
+                a_w, a_o = par[po == wi], par[po != wi]
+                z = (a_w.mean(0) - a_o.mean(0)) / a_o.std(0).clamp_min(1e-4)
+                score = hit + 1e-3 * z.clamp(-100, 100)
+                for i in score.topk(4 * k).indices.tolist():
+                    n = {"layer": l, "index": i, "sign": sign, "word": w, "hit": float(hit[i]), "z_min": float(z[i]),
+                         "a_nat": float(a_w[:, i].mean())}
+                    if i not in cand or (cand[i]["hit"], cand[i]["z_min"]) < (n["hit"], n["z_min"]):
+                        cand[i] = n
+        for w in words:
+            out += sorted((n for n in cand.values() if n["word"] == w), key=lambda n: (-n["hit"], -n["z_min"]))[:k]
+    return out
