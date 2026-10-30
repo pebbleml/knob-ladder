@@ -131,3 +131,28 @@ def context_hit_rate(contexts: List[Dict], word: str) -> float:
     terms = set().union(*(_forms(t) for t in [word] + ASSOCIATES.get(word, [])))
     pat = re.compile(r"\b(" + "|".join(sorted(map(re.escape, terms), key=len, reverse=True)) + r")\b", re.I)
     return sum(bool(pat.search(c["context"].replace("[[", "").replace("]]", ""))) for c in contexts) / max(1, len(contexts))
+
+
+def top_poles(acts: Dict[int, torch.Tensor], words: Sequence[str], k: int = 3) -> List[Dict]:
+    """Per layer and concept, the k poles with the highest worst-template z (no threshold; z_min is kept so
+    results can be split by it). A neuron among the top k of two concepts goes to the one it scores higher on."""
+    out = []
+    for l, a in acts.items():
+        W = a.shape[1]
+        z = torch.empty_like(a)
+        for w in range(W):
+            others = torch.cat([a[:, :w], a[:, w + 1:]], 1)
+            z[:, w] = (a[:, w] - others.mean(1)) / others.std(1).clamp_min(1e-4)
+        cand = {}
+        for sign in (1, -1):
+            score = (sign * z).min(0).values  # (W, d_ff)
+            for w in range(W):
+                vals, idx = score[w].topk(4 * k)
+                for s, i in zip(vals.tolist(), idx.tolist()):
+                    if i not in cand or cand[i]["z_min"] < s:
+                        cand[i] = {"layer": l, "index": i, "sign": sign, "word": words[w], "z_min": s,
+                                   "z_mean": float((sign * z[:, w, i]).mean()),
+                                   "a_nat": float((sign * a[:, w, i]).mean())}
+        for w in words:
+            out += sorted((n for n in cand.values() if n["word"] == w), key=lambda n: -n["z_min"])[:k]
+    return out
