@@ -10,6 +10,8 @@
 4. Collapse (added after seeing, mid-run, writes shrink to "The" in the longest episodes): per episode, the first WRITE
    that ends mid-sentence (no final . ! ? or quote), the kind and level of the knob it was under, and how many later
    writes are <= 2 words.
+5. Repeats (pre-declared for R1.d2 in discover.py; added after R1.d): per kind and level band, the rate of writes
+   equal (whitespace-normalised) to an earlier write of the same episode.
 """
 import json
 import re
@@ -76,6 +78,20 @@ def main(path):
         print(f"  ep{ep['episode']:2d}: turn {cut}/{len(ws)} under {tr['kind']} {tr['id']} L{tr['level']}: {tr['write'][-60:]!r}; "
               f"{tiny} later writes <= 2 words; ended {ep['done']}")
     print(f"  first cut by kind: {first} (board share 8/2/2)")
+
+    print("\n5. Repeats of an earlier write, by kind and level band:")
+    norm = lambda t: " ".join(t.split())
+    bands = (("0", 0, 0), ("1-4", 1, 4), ("5-7", 5, 7), ("8-10", 8, 10))
+    rows = {}
+    for ep in eps:
+        seen = set()
+        for tr in ep["turns"]:
+            b = next(n for n, lo, hi in bands if lo <= tr["level"] <= hi)
+            rows.setdefault((tr["kind"], b), []).append(float(norm(tr["write"]) in seen))
+            seen.add(norm(tr["write"]))
+    for kd in kinds:
+        print(f"  {kd:6s} " + " | ".join(f"L{n} {mean(rows[kd, n]):.2f} (n={len(rows[kd, n])})" if rows.get((kd, n)) else f"L{n} -"
+                                       for n, _, _ in bands))
 
 
 if __name__ == "__main__":

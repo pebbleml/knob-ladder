@@ -36,6 +36,13 @@ each episode from its viewer files (boards from the same seeds, checked against 
 decision, write and note re-encoded as text) and runs step 2 only. Not recoverable from the viewer files: the text
 before an episode's end_session call (replaced by the bare call) and any reply that got a NUDGE (not in the files).
 A ceiling episode's last, unexecuted decision is left out.
+
+R1.d2 (2026-10-31, after record 409b2dfc): R1.d's writes copied earlier writes word for word, even at level 10, so
+the knobs rarely changed what the model saw. R1.d2 is R1.d unchanged (prompts, boards, seeds, primaries P1-P3,
+secondaries, stop rule) except the dose: --dose runs/dose_cal_<model>_<time>.json (scripts/dose_cal.py) supplies f*,
+the kept neurons and the retired ones, calibrated in a context where the model has already written four times. Added
+secondary, fixed before R1.d2 runs: per kind and level band (0, 1-4, 5-7, 8-10), the rate of writes that repeat an
+earlier write of the same episode word for word (discover_analysis.py section 5).
 """
 from __future__ import annotations
 
@@ -97,6 +104,7 @@ def main():
     ap.add_argument("--max-new", type=int, default=128)
     ap.add_argument("--batch", type=int, default=16)
     ap.add_argument("--final-batch", type=int, default=2, help="batch for the end-of-session branches and finals")
+    ap.add_argument("--dose", default=None, help="R1.d2: dose_cal.py output supplying f*, kept and retired neurons")
     ap.add_argument("--resume-live", default=None, help="rebuild episodes from this runs/live/<run> dir; step 2 only")
     args = ap.parse_args()
 
@@ -105,10 +113,11 @@ def main():
     src = json.loads(Path(args.src).read_text())
     model = args.model or src["model"]
     lm = SteeredLM(model, dtype=getattr(torch, args.dtype))
-    fstar = src["fstar"]
-    retired = {tuple(x) for x in src["retired"]}
-    kept = [tuple(c) for c in src["kept"] if tuple(c) not in retired]
-    if model != src["model"]:  # smoke test on another model: same indices, mapped onto its layers and width
+    cal = json.loads(Path(args.dose).read_text()) if args.dose else src
+    fstar = cal["fstar"]
+    retired = {tuple(x) for x in cal["retired"]}
+    kept = [tuple(c) for c in cal["kept"] if tuple(c) not in retired]
+    if model != cal["model"]:  # smoke test on another model: same indices, mapped onto its layers and width
         width = lm.layers[0].mlp.down_proj.weight.shape[1]
         kept = sorted({(min(lm.n_layers - 1, l * lm.n_layers // 64), i % width, s) for l, i, s in kept})
     layers = sorted({c[0] for c in kept})
@@ -118,7 +127,7 @@ def main():
     end_id = lm.token_id("<|im_end|>")
     yes_no = {w: sorted({lm.encode(x)[0] for x in (w, w.capitalize(), " " + w)}) for w in ("yes", "no")}
     stamp = time.strftime('%Y%m%d-%H%M%S')
-    name = Path(args.resume_live).name if args.resume_live else f"discover_{model.split('/')[-1]}_{stamp}"
+    name = Path(args.resume_live).name if args.resume_live else f"discover{'2' if args.dose else ''}_{model.split('/')[-1]}_{stamp}"
     live = ROOT / "runs" / "live" / name
     live.mkdir(parents=True, exist_ok=True)
     prompts = {"system": SYSTEM, "begin": BEGIN, "task": TASK, "note": NOTE, "next": NEXT, "nudge": NUDGE,
