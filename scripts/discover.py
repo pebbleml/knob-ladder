@@ -51,6 +51,10 @@ R1.d3 (2026-10-31): the dose cannot rise, so the copying is removed from the tas
 with TASK_NEW (same topic, asks for sentences not written before; says nothing about the knobs), with R1.d2's dose
 file (f*=0.5, 96 kept). Everything else, primaries and the repeat secondary included, is R1.d2's. Prediction fixed
 before it runs: the repeat rate falls well below R1.d's; whether P1 or P2 moves is the question.
+First attempt aborted at step 5 (runs/live/aborted_discover3_*, nothing scored): TASK_NEW writes ran longer (often
+60-100 words, some with a note inline) and hit the 128-token cap mid-sentence; in two episodes the model then cut
+its own writes and notes shorter each turn (ep1: 101, 85, 34, 15, 5 words). Rerun with --max-new 320 (notes too), so
+no write is cut by the cap. The cap likely also drove R1.d's late collapse to "The".
 """
 from __future__ import annotations
 
@@ -266,7 +270,7 @@ def main():
                 return Intervention(x["layer"], v, len(ep["ids"]))
             writes = gen(pressers, lambda ep: TURNED.format(k=kl[ep["episode"]][0], level=kl[ep["episode"]][1])
                          + user(TASK) + GEN, window)
-            notes = gen(pressers, lambda ep: user(NOTE) + GEN, max_new=160)
+            notes = gen(pressers, lambda ep: user(NOTE) + GEN, max_new=max(160, args.max_new))
             for ep, w, n in zip(pressers, writes, notes):
                 k, level, decision = kl[ep["episode"]]
                 x = ep["knobs"][k]
