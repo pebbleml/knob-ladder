@@ -55,6 +55,17 @@ First attempt aborted at step 5 (runs/live/aborted_discover3_*, nothing scored):
 60-100 words, some with a note inline) and hit the 128-token cap mid-sentence; in two episodes the model then cut
 its own writes and notes shorter each turn (ep1: 101, 85, 34, 15, 5 words). Rerun with --max-new 320 (notes too), so
 no write is cut by the cap. The cap likely also drove R1.d's late collapse to "The".
+Outcome: writes still collapsed (402/1183 turns <= 2 words), and not from the cap: scripts/diag_collapse.py shows that
+at each episode's first mid-sentence stop the model with the session's steering put 0.6-0.96 on <|im_end|> where the
+same tokens unsteered put ~0, and neither the current window alone nor the earlier windows alone did. Qwen3.8 is
+hybrid: steering in earlier turns stays in its recurrent state, so "returns all the others to 0" did not hold.
+
+R1.d4 (2026-10-31): R1.d3 with --carry turn. Each generation is a fresh prefill of the transcript under the current
+turn's steering window only: the write and the NOTE after it see the knob's steering (in the state over the tool
+response and write), the next decision and later turns do not. Exploration is otherwise R1.d3's. End of session is
+unchanged: cached = every window of the session steered, observer = none, so P1-P3 keep their meaning (does the
+model's steered encoding of the session, beyond its text, tell real knobs from shams). Predictions fixed before it
+runs: writes of <= 2 words fall from R1.d3's 34% of turns to under 5%; the primaries are the open question.
 """
 from __future__ import annotations
 
@@ -118,6 +129,8 @@ def main():
     ap.add_argument("--batch", type=int, default=16)
     ap.add_argument("--final-batch", type=int, default=2, help="batch for the end-of-session branches and finals")
     ap.add_argument("--dose", default=None, help="R1.d2: dose_cal.py output supplying f*, kept and retired neurons")
+    ap.add_argument("--carry", default="session", choices=["session", "turn"],
+                    help="R1.d4: 'turn' keeps a knob's steering in the state for its own turn only")
     ap.add_argument("--task-new", action="store_true", help="R1.d3: TASK_NEW in place of TASK")
     ap.add_argument("--resume-live", default=None, help="rebuild episodes from this runs/live/<run> dir; step 2 only")
     args = ap.parse_args()
@@ -144,7 +157,7 @@ def main():
     end_id = lm.token_id("<|im_end|>")
     yes_no = {w: sorted({lm.encode(x)[0] for x in (w, w.capitalize(), " " + w)}) for w in ("yes", "no")}
     stamp = time.strftime('%Y%m%d-%H%M%S')
-    name = Path(args.resume_live).name if args.resume_live else f"discover{'3' if args.task_new else '2' if args.dose else ''}_{model.split('/')[-1]}_{stamp}"
+    name = Path(args.resume_live).name if args.resume_live else f"discover{'4' if args.carry == 'turn' else '3' if args.task_new else '2' if args.dose else ''}_{model.split('/')[-1]}_{stamp}"
     live = ROOT / "runs" / "live" / name
     live.mkdir(parents=True, exist_ok=True)
     prompts = {"system": SYSTEM, "begin": BEGIN, "task": TASK, "note": NOTE, "next": NEXT, "nudge": NUDGE,
@@ -188,7 +201,7 @@ def main():
             knobs[n] = {"kind": kind, "id": list(x) if kind == "neuron" else x, "layer": l,
                         "vector": None if v is None else v * fstar * scales[l]}
         eps.append({"episode": e, "knobs": knobs, "ids": lm.encode(lm.fmt.system(SYSTEM, TOOLS)), "sched": [],
-                    "turns": [], "events": [], "done": None, "calls": 0, "prompt": BEGIN, "misses": 0})
+                    "turns": [], "events": [], "done": None, "calls": 0, "prompt": BEGIN, "misses": 0, "live": []})
     seed = lambda ep: 30_000 + 1000 * ep["episode"] + ep["calls"]
     kid = lambda ep, k: tuple(ep["knobs"][k]["id"]) if ep["knobs"][k]["kind"] == "neuron" else None
 
@@ -198,7 +211,7 @@ def main():
         for ep in group:
             win = [sched_fn(ep)] if sched_fn else []
             ep["ids"] = ep["ids"] + lm.encode(tail(ep))
-            jobs.append((ep["ids"], ep["sched"] + win))
+            jobs.append((ep["ids"], (ep["live"] if args.carry == "turn" else ep["sched"]) + win))
         outs = sample(jobs, [seed(ep) for ep in group], max_new or args.max_new)
         texts = []
         for ep, (ids, sch), out in zip(group, jobs, outs):
@@ -208,7 +221,7 @@ def main():
                 ep["events"].append({"kind": "call_in_reply_cut", "turn": len(ep["turns"]), "text": call})
             if sched_fn:
                 sch[-1].end = len(ids) + max(0, len(body) - 1)
-                ep["sched"] = sch
+                ep["sched"], ep["live"] = ep["sched"] + sch[-1:], sch[-1:]
             ep["ids"] = ep["ids"] + body + closing
             texts.append(text)
         return texts
@@ -218,7 +231,7 @@ def main():
 
     def snapshot():
         """Viewer files (runs/live/<run>/), rewritten after every step so the exploration can be watched."""
-        clean = [{**{k: v for k, v in ep.items() if k not in ("ids", "sched", "knobs")},
+        clean = [{**{k: v for k, v in ep.items() if k not in ("ids", "sched", "knobs", "live")},
                   "knobs": {str(n): {a: b for a, b in x.items() if a != "vector"} for n, x in ep["knobs"].items()}}
                  for ep in eps]
         live_dump({"model": model, "fstar": fstar, "prompts": prompts, "episodes": clean}, name, live, t0 + 0.0)
@@ -237,6 +250,8 @@ def main():
     step = 0
     while any(ep["done"] is None for ep in eps):
         group = [ep for ep in eps if ep["done"] is None]
+        for ep in group:
+            ep["live"] = []  # --carry turn: a decision sees no steering
         texts = gen(group, decide_tail)
         kl, pressers = {}, []
         for ep, t in zip(group, texts):
