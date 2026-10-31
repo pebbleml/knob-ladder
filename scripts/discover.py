@@ -66,6 +66,14 @@ response and write), the next decision and later turns do not. Exploration is ot
 unchanged: cached = every window of the session steered, observer = none, so P1-P3 keep their meaning (does the
 model's steered encoding of the session, beyond its text, tell real knobs from shams). Predictions fixed before it
 runs: writes of <= 2 words fall from R1.d3's 34% of turns to under 5%; the primaries are the open question.
+
+Recovery 2 (R1.d4, 2026-10-31): exploration ran out of GPU memory at step 86 (11 episodes still exploring, about
+85 turns each, batch 11 at roughly 35k tokens a row, 79 GB in use). No primary had been computed and nothing had been
+read beyond the viewer. Two changes, neither touching the design: --tokens-per-batch caps a batch's rows x longest
+row (the batch shrinks as transcripts grow), and --resume-explore <live dir> rebuilds every episode from its viewer
+files as --resume-live does, then lets the unfinished ones keep exploring from where they were. A resumed episode's
+sampling seeds continue from 3 calls per kept turn (a NUDGEd reply is not in the files, so they may differ from the
+seeds an uninterrupted run would have drawn); its transcript is re-encoded from text, as in Recovery.
 """
 from __future__ import annotations
 
@@ -133,6 +141,8 @@ def main():
                     help="R1.d4: 'turn' keeps a knob's steering in the state for its own turn only")
     ap.add_argument("--task-new", action="store_true", help="R1.d3: TASK_NEW in place of TASK")
     ap.add_argument("--resume-live", default=None, help="rebuild episodes from this runs/live/<run> dir; step 2 only")
+    ap.add_argument("--resume-explore", default=None, help="rebuild from this live dir and keep exploring unfinished episodes")
+    ap.add_argument("--tokens-per-batch", type=int, default=160_000, help="cap on rows x longest row per generation batch")
     args = ap.parse_args()
 
     if args.task_new:
@@ -157,7 +167,8 @@ def main():
     end_id = lm.token_id("<|im_end|>")
     yes_no = {w: sorted({lm.encode(x)[0] for x in (w, w.capitalize(), " " + w)}) for w in ("yes", "no")}
     stamp = time.strftime('%Y%m%d-%H%M%S')
-    name = Path(args.resume_live).name if args.resume_live else f"discover{'4' if args.carry == 'turn' else '3' if args.task_new else '2' if args.dose else ''}_{model.split('/')[-1]}_{stamp}"
+    resume = args.resume_live or args.resume_explore
+    name = Path(resume).name if resume else f"discover{'4' if args.carry == 'turn' else '3' if args.task_new else '2' if args.dose else ''}_{model.split('/')[-1]}_{stamp}"
     live = ROOT / "runs" / "live" / name
     live.mkdir(parents=True, exist_ok=True)
     prompts = {"system": SYSTEM, "begin": BEGIN, "task": TASK, "note": NOTE, "next": NEXT, "nudge": NUDGE,
@@ -167,9 +178,10 @@ def main():
     def sample(jobs, seeds, max_new, bs=None):
         bs = bs or args.batch
         order = sorted(range(len(jobs)), key=lambda i: -len(jobs[i][0]))  # longest first, so memory peaks early
-        outs = {}
-        for lo in range(0, len(order), bs):
-            ch = order[lo:lo + bs]
+        outs, lo = {}, 0
+        while lo < len(order):
+            ch = order[lo:lo + max(1, min(bs, args.tokens_per_batch // len(jobs[order[lo]][0])))]
+            lo += len(ch)
             res = lm.generate_batch([jobs[i][0] for i in ch], [jobs[i][1] for i in ch], max_new, stops, 0.7, 0.8, 20,
                                     [seeds[i] for i in ch])
             outs.update(zip(ch, res))
@@ -236,9 +248,9 @@ def main():
                  for ep in eps]
         live_dump({"model": model, "fstar": fstar, "prompts": prompts, "episodes": clean}, name, live, t0 + 0.0)
 
-    if args.resume_live:
-        rebuild(lm, eps, Path(args.resume_live), kid, retired)
-        log(f"rebuilt {len(eps)} episodes from {args.resume_live}: turns {[len(ep['turns']) for ep in eps]}, "
+    if resume:
+        rebuild(lm, eps, Path(resume), kid, retired, unfinished=bool(args.resume_explore))
+        log(f"rebuilt {len(eps)} episodes from {resume}: tokens {[len(ep['ids']) for ep in eps]}, turns {[len(ep['turns']) for ep in eps]}, "
             f"ended {[ep['done'] for ep in eps]}")
 
     def stop(ep, k, where, text):
@@ -248,7 +260,7 @@ def main():
             retired.add(kid(ep, k))
 
     step = 0
-    while any(ep["done"] is None for ep in eps):
+    while any(ep["done"] is None for ep in eps) and not args.resume_live:
         group = [ep for ep in eps if ep["done"] is None]
         for ep in group:
             ep["live"] = []  # --carry turn: a decision sees no steering
@@ -407,13 +419,13 @@ def main():
     out = ROOT / "runs" / f"{name}.json"
     out.write_text(json.dumps({
         "model": model, "provenance": lm.provenance(), "args": vars(args), "from": args.src, "fstar": fstar,
-        "prompts": prompts, "resumed_from_live": args.resume_live,
+        "prompts": prompts, "resumed_from_live": resume, "resume_kind": "explore" if args.resume_explore else "finals" if args.resume_live else None,
         "residual_scale": {str(k): v for k, v in scales.items()}, "kept": kept, "summary": summary, "secondary": sec,
         "episodes": eps}, indent=1))
     print(out)
 
 
-def rebuild(lm, eps, live, kid, retired):
+def rebuild(lm, eps, live, kid, retired, unfinished=False):
     """Rebuild ids, schedule and turns of each episode from its viewer file (see the docstring, Recovery)."""
     for ep in eps:
         ev = [json.loads(l) for l in (live / f"ep{ep['episode']:03d}.jsonl").read_text().splitlines()]
@@ -422,8 +434,8 @@ def rebuild(lm, eps, live, kid, retired):
         assert board == mine, (ep["episode"], board, mine)
         ms = [x for x in ev if x["type"] == "msg" and x["role"] != "system"]
         ended = [x["text"] for x in ms if x["role"] == "tool" and x["text"].startswith("[session ended")]
-        assert ended, f"episode {ep['episode']} did not end in the viewer files"
-        ep["done"] = ended[0].split(": ")[1].split(" after")[0]
+        assert ended or unfinished, f"episode {ep['episode']} did not end in the viewer files"
+        ep["done"] = ended[0].split(": ")[1].split(" after")[0] if ended else None
         ids, sched, turns = ep["ids"], [], []
         i = 0
         while i < len(ms) and ms[i]["role"] == "user" and i + 1 < len(ms) and ms[i + 1]["role"] == "assistant" \
@@ -447,6 +459,8 @@ def rebuild(lm, eps, live, kid, retired):
         if ep["done"] == "end_session":
             ids = ids + lm.encode(user(NEXT) + GEN) + lm.encode(lm.fmt.tool_call("end_session", {})) + lm.encode(END)
         ep["ids"], ep["sched"], ep["turns"] = ids, sched, turns
+        if ep["done"] is None:  # --resume-explore: continue as after a kept turn
+            ep["calls"], ep["prompt"] = 3 * len(turns), NEXT
         ep["events"].append({"kind": "rebuilt_from_live", "turns": len(turns)})
 
 
