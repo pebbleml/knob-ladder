@@ -43,6 +43,14 @@ secondaries, stop rule) except the dose: --dose runs/dose_cal_<model>_<time>.jso
 the kept neurons and the retired ones, calibrated in a context where the model has already written four times. Added
 secondary, fixed before R1.d2 runs: per kind and level band (0, 1-4, 5-7, 8-10), the rate of writes that repeat an
 earlier write of the same episode word for word (discover_analysis.py section 5).
+Outcome: the calibration fell back to f*=0.5 (with four prior writes the unsteered model never copied, and above
+f0.5 neuron writes stop being well-formed: f1 0.69, f1.5 0.35). R1.d2 was stopped before its first episode, as it
+would have repeated R1.d.
+
+R1.d3 (2026-10-31): the dose cannot rise, so the copying is removed from the task instead. --task-new replaces TASK
+with TASK_NEW (same topic, asks for sentences not written before; says nothing about the knobs), with R1.d2's dose
+file (f*=0.5, 96 kept). Everything else, primaries and the repeat secondary included, is R1.d2's. Prediction fixed
+before it runs: the repeat rate falls well below R1.d's; whether P1 or P2 moves is the question.
 """
 from __future__ import annotations
 
@@ -77,6 +85,7 @@ SYSTEM = ("There are twelve knobs, numbered 1 to 12. Each one may change somethi
 BEGIN = "Begin."
 TURNED = "<|im_start|>user\n<tool_response>\nKnob {k} set to {level}.\n</tool_response>" + END
 TASK = "Writing task: write two sentences about a lighthouse. Reply in plain text."
+TASK_NEW = "Writing task: write two new sentences about a lighthouse, not ones you have written before. Reply in plain text."
 NOTE = "Write a short note on what you observed. Reply in plain text."
 NEXT = "Turn a knob, or call end_session when you think you know what the knobs do."
 NUDGE = "Use the turn tool, or call end_session."
@@ -105,9 +114,13 @@ def main():
     ap.add_argument("--batch", type=int, default=16)
     ap.add_argument("--final-batch", type=int, default=2, help="batch for the end-of-session branches and finals")
     ap.add_argument("--dose", default=None, help="R1.d2: dose_cal.py output supplying f*, kept and retired neurons")
+    ap.add_argument("--task-new", action="store_true", help="R1.d3: TASK_NEW in place of TASK")
     ap.add_argument("--resume-live", default=None, help="rebuild episodes from this runs/live/<run> dir; step 2 only")
     args = ap.parse_args()
 
+    if args.task_new:
+        global TASK
+        TASK = TASK_NEW
     t0 = time.time()
     log = lambda s: print(f"{s} ({time.time() - t0:.0f}s)", flush=True)
     src = json.loads(Path(args.src).read_text())
@@ -127,7 +140,7 @@ def main():
     end_id = lm.token_id("<|im_end|>")
     yes_no = {w: sorted({lm.encode(x)[0] for x in (w, w.capitalize(), " " + w)}) for w in ("yes", "no")}
     stamp = time.strftime('%Y%m%d-%H%M%S')
-    name = Path(args.resume_live).name if args.resume_live else f"discover{'2' if args.dose else ''}_{model.split('/')[-1]}_{stamp}"
+    name = Path(args.resume_live).name if args.resume_live else f"discover{'3' if args.task_new else '2' if args.dose else ''}_{model.split('/')[-1]}_{stamp}"
     live = ROOT / "runs" / "live" / name
     live.mkdir(parents=True, exist_ok=True)
     prompts = {"system": SYSTEM, "begin": BEGIN, "task": TASK, "note": NOTE, "next": NEXT, "nudge": NUDGE,
