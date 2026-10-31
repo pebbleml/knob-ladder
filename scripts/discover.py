@@ -74,6 +74,10 @@ row (the batch shrinks as transcripts grow), and --resume-explore <live dir> reb
 files as --resume-live does, then lets the unfinished ones keep exploring from where they were. A resumed episode's
 sampling seeds continue from 3 calls per kept turn (a NUDGEd reply is not in the files, so they may differ from the
 seeds an uninterrupted run would have drawn); its transcript is re-encoded from text, as in Recovery.
+Deviation, decided after reading the viewer files and before any end-of-session question: the 11 unfinished episodes
+(87-88 turns) had collapsed again (from turns 14-62 on, writes "The" and notes "Note"; 413/1338 writes <= 2 words, so
+the R1.d4 prediction of < 5% failed), so they are not run on to the ceiling. --truncate ends them where they were
+(done "truncated") and step 2 runs on all 32; primaries are reported with and without them.
 """
 from __future__ import annotations
 
@@ -142,6 +146,7 @@ def main():
     ap.add_argument("--task-new", action="store_true", help="R1.d3: TASK_NEW in place of TASK")
     ap.add_argument("--resume-live", default=None, help="rebuild episodes from this runs/live/<run> dir; step 2 only")
     ap.add_argument("--resume-explore", default=None, help="rebuild from this live dir and keep exploring unfinished episodes")
+    ap.add_argument("--truncate", action="store_true", help="with --resume-explore: end unfinished episodes as they are")
     ap.add_argument("--tokens-per-batch", type=int, default=160_000, help="cap on rows x longest row per generation batch")
     args = ap.parse_args()
 
@@ -250,6 +255,9 @@ def main():
 
     if resume:
         rebuild(lm, eps, Path(resume), kid, retired, unfinished=bool(args.resume_explore))
+        for ep in eps:
+            if args.truncate and ep["done"] is None:
+                ep["done"] = "truncated"
         log(f"rebuilt {len(eps)} episodes from {resume}: tokens {[len(ep['ids']) for ep in eps]}, turns {[len(ep['turns']) for ep in eps]}, "
             f"ended {[ep['done'] for ep in eps]}")
 
@@ -310,7 +318,7 @@ def main():
         alive = sum(ep["done"] is None for ep in eps)
         if step % 5 == 0 or not alive:
             log(f"step {step}: {len(pressers)} turns, {alive} episodes still exploring; ended "
-                + str({d: sum(ep['done'] == d for ep in eps) for d in ('end_session', 'no_call', 'ceiling', 'stop_rule')}))
+                + str({d: sum(ep['done'] == d for ep in eps) for d in ('end_session', 'no_call', 'ceiling', 'stop_rule', 'truncated')}))
 
     if not args.resume_live:
         torch.save([{k: ep[k] for k in ("episode", "ids", "sched", "turns", "done", "events")} for ep in eps],
@@ -403,7 +411,7 @@ def main():
            "turns": [len(ep["turns"]) for ep in eps], "tried": [len(ep["tried"]) for ep in eps],
            "level0_turns": sum(tr["level"] == 0 for ep in eps for tr in ep["turns"]),
            "revisits": sum(len(ep["turns"]) - len({tr["knob"] for tr in ep["turns"]}) for ep in eps),
-           "ended": {d: sum(ep["done"] == d for ep in eps) for d in ("end_session", "no_call", "ceiling", "stop_rule")},
+           "ended": {d: sum(ep["done"] == d for ep in eps) for d in ("end_session", "no_call", "ceiling", "stop_rule", "truncated")},
            "retired": sorted(retired)}
     for k, v in summary.items():
         log(f"{k}: {v['mean']:+.3f} [{v['ci'][0]:+.3f}, {v['ci'][1]:+.3f}] n={v['n']}")
@@ -419,7 +427,7 @@ def main():
     out = ROOT / "runs" / f"{name}.json"
     out.write_text(json.dumps({
         "model": model, "provenance": lm.provenance(), "args": vars(args), "from": args.src, "fstar": fstar,
-        "prompts": prompts, "resumed_from_live": resume, "resume_kind": "explore" if args.resume_explore else "finals" if args.resume_live else None,
+        "prompts": prompts, "resumed_from_live": resume, "resume_kind": "truncate" if args.truncate else "explore" if args.resume_explore else "finals" if args.resume_live else None,
         "residual_scale": {str(k): v for k, v in scales.items()}, "kept": kept, "summary": summary, "secondary": sec,
         "episodes": eps}, indent=1))
     print(out)
