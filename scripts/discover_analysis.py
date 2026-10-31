@@ -30,7 +30,7 @@ NULL = re.compile(r"\b(nothing|no (noticeable |observable |obvious |clear |appar
 def main(path):
     d = json.loads(Path(path).read_text())
     eps = d["episodes"]
-    kinds = ("neuron", "random", "sham")
+    kinds = ("concept" if any(x["kind"] == "concept" for ep in eps for x in ep["knobs"].values()) else "neuron", "random", "sham")
     print(f"{len(eps)} episodes; ended {d['secondary']['ended']}; turns mean {mean(d['secondary']['turns']):.1f}")
     for k, v in d["summary"].items():
         print(f"  {k}: {v['mean']:+.3f} [{v['ci'][0]:+.3f}, {v['ci'][1]:+.3f}] n={v['n']}")
@@ -44,8 +44,8 @@ def main(path):
     for ep in eps:
         by = {kd: [float(bool(NULL.search(tr["note"]))) for tr in ep["turns"] if tr["kind"] == kd and tr["level"] > 0]
               for kd in kinds}
-        if by["neuron"] and by["sham"]:
-            diff.append(mean(by["sham"]) - mean(by["neuron"]))
+        if by[kinds[0]] and by["sham"]:
+            diff.append(mean(by["sham"]) - mean(by[kinds[0]]))
     print(f"  per episode, sham - neuron no-change rate: {mean(diff):+.3f} {bootstrap_ci(diff)} n={len(diff)}")
 
     print("\n2. WRITE word count by level (level priming check):")

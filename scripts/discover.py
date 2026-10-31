@@ -78,6 +78,19 @@ Deviation, decided after reading the viewer files and before any end-of-session 
 (87-88 turns) had collapsed again (from turns 14-62 on, writes "The" and notes "Note"; 413/1338 writes <= 2 words, so
 the R1.d4 prediction of < 5% failed), so they are not run on to the ceiling. --truncate ends them where they were
 (done "truncated") and step 2 runs on all 32; primaries are reported with and without them.
+
+R0.d (2026-10-31, after R1.d4, record cc9f750c): the positive control the ladder calls for. Four R1.d designs gave
+no sign that the 27B tells real neuron knobs from shams, but R1.d never showed the design can find a knob that is
+plainly there. R0.d is R1.d4 exactly (framing A, TASK_NEW, --carry turn, --max-new 320, the ceiling, seeds, P1-P3,
+stop rule) with --concepts: the 8 neuron knobs are 8 concept-vector knobs (unit vector x alpha x the layer's median
+residual norm x level/10), from R0's G0 screen and G1 generation calibration on the 27B (layer 44/64, alpha 0.5, G1
+pass: held-out specificity +0.47, dNLL +0.28). Excluded beforehand, as a lighthouse write names them unsteered:
+anchor, island, moon, ocean. Random knobs are at layer 44, same norm. Concept words never reach the model.
+Kind "concept" takes the place of "neuron" in P1-P3. Added secondaries, fixed before it runs: (a) manipulation
+check, share of writes naming the knob's concept (knobs.lexical_hits) under that concept vs under sham knobs naming
+any of the episode's concepts; (b) binding, share of per-knob lines for tried concept knobs that name their own
+concept, and that name another board concept instead, cached and observer. Predictions: (a) well above sham;
+(b) own-concept lines > 0.25 cached; P1 concept > 0; whether cached beats observer (P2) is the question.
 """
 from __future__ import annotations
 
@@ -97,7 +110,8 @@ sys.path.insert(0, str(ROOT))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from knobladder.episode import TOOLS, turned_knob, turned_level  # noqa: E402
-from knobladder.knobs import neuron_direction, random_direction, residual_scale, unit  # noqa: E402
+from knobladder.knobs import (CONCEPTS, concept_vectors, lexical_hits, neuron_direction, random_direction,  # noqa: E402
+                              residual_scale, unit)
 from knobladder.model import Intervention, SteeredLM  # noqa: E402
 from knobladder.stats import bootstrap_ci, mean  # noqa: E402
 from knobladder.text import END, GEN, parse_call, user  # noqa: E402
@@ -126,6 +140,7 @@ NULL = re.compile(r"\b(nothing|no (noticeable |observable |obvious |clear |appar
                   r"no-op|decoy|inert|inactive|placebo|dummy|untested|not tested|never tested)\b", re.I)
 SELF = re.compile(r"\b(my (own )?(writing|output|thinking|thoughts|processing|style|tone|responses?|replies|text|mind|"
                   r"state|mood|voice|language|perspective)|me\b|myself|internal\w*|how i (write|think|respond))", re.I)
+EXCLUDE = {"anchor", "island", "moon", "ocean"}  # R0.d: named by unsteered lighthouse writes
 LINE = re.compile(r"knob\s*(\d+)\s*[:\-–—]\s*(.+)", re.I)
 
 
@@ -146,6 +161,8 @@ def main():
     ap.add_argument("--task-new", action="store_true", help="R1.d3: TASK_NEW in place of TASK")
     ap.add_argument("--resume-live", default=None, help="rebuild episodes from this runs/live/<run> dir; step 2 only")
     ap.add_argument("--resume-explore", default=None, help="rebuild from this live dir and keep exploring unfinished episodes")
+    ap.add_argument("--concepts", default=None, help="R0.d: G0 screen JSON; concept-vector knobs in place of neurons")
+    ap.add_argument("--concept-cal", default=None, help="R0.d: G1 calibrate_gen JSON whose best sets layer and alpha")
     ap.add_argument("--truncate", action="store_true", help="with --resume-explore: end unfinished episodes as they are")
     ap.add_argument("--tokens-per-batch", type=int, default=160_000, help="cap on rows x longest row per generation batch")
     args = ap.parse_args()
@@ -165,15 +182,23 @@ def main():
     if model != cal["model"]:  # smoke test on another model: same indices, mapped onto its layers and width
         width = lm.layers[0].mlp.down_proj.weight.shape[1]
         kept = sorted({(min(lm.n_layers - 1, l * lm.n_layers // 64), i % width, s) for l, i, s in kept})
+    KIND = "concept" if args.concepts else "neuron"
+    if args.concepts:
+        best = json.loads(Path(args.concept_cal).read_text())["best"]
+        cl = int(best["layer_frac"] * lm.n_layers)
+        fstar, retired = best["alpha"], set()
+        words = [w for w in json.loads(Path(args.concepts).read_text())["knobs"] if w not in EXCLUDE]
+        vecs = concept_vectors(lm, CONCEPTS, cl)
+        kept = [(cl, w, 1) for w in words]
     layers = sorted({c[0] for c in kept})
     scales = {l: residual_scale(lm, l) for l in layers}
-    dirs = {c: c[2] * unit(neuron_direction(lm, c[0], c[1])) for c in kept}
+    dirs = {c: unit(vecs[c[1]]) if args.concepts else c[2] * unit(neuron_direction(lm, c[0], c[1])) for c in kept}
     stops = [lm.token_id(t) for t in ("</tool_call>", "<|im_end|>", "<|im_start|>", "<tool_response>")]
     end_id = lm.token_id("<|im_end|>")
     yes_no = {w: sorted({lm.encode(x)[0] for x in (w, w.capitalize(), " " + w)}) for w in ("yes", "no")}
     stamp = time.strftime('%Y%m%d-%H%M%S')
     resume = args.resume_live or args.resume_explore
-    name = Path(resume).name if resume else f"discover{'4' if args.carry == 'turn' else '3' if args.task_new else '2' if args.dose else ''}_{model.split('/')[-1]}_{stamp}"
+    name = Path(resume).name if resume else f"discover_r0d_{model.split('/')[-1]}_{stamp}" if args.concepts else f"discover{'4' if args.carry == 'turn' else '3' if args.task_new else '2' if args.dose else ''}_{model.split('/')[-1]}_{stamp}"
     live = ROOT / "runs" / "live" / name
     live.mkdir(parents=True, exist_ok=True)
     prompts = {"system": SYSTEM, "begin": BEGIN, "task": TASK, "note": NOTE, "next": NEXT, "nudge": NUDGE,
@@ -208,19 +233,19 @@ def main():
     eps = []
     for e in range(args.episodes):
         r = random.Random(50_000 + e)
-        items = [("neuron", c) for c in r.sample(kept, args.neurons)]
+        items = [(KIND, c) for c in r.sample(kept, args.neurons)]
         items += [("random", 9_000_011 * (e + 1) + j) for j in range(2)]
         items += [("sham", None)] * (N_KNOBS - len(items))
         knobs = {}
         for n, (kind, x) in zip(r.sample(range(1, N_KNOBS + 1), N_KNOBS), items):
-            l = x[0] if kind == "neuron" else layers[0]
-            v = (dirs[x] if kind == "neuron" else unit(random_direction(lm.d_model, x)) if kind == "random" else None)
-            knobs[n] = {"kind": kind, "id": list(x) if kind == "neuron" else x, "layer": l,
+            l = x[0] if kind == KIND else layers[0]
+            v = (dirs[x] if kind == KIND else unit(random_direction(lm.d_model, x)) if kind == "random" else None)
+            knobs[n] = {"kind": kind, "id": list(x) if kind == KIND else x, "layer": l,
                         "vector": None if v is None else v * fstar * scales[l]}
         eps.append({"episode": e, "knobs": knobs, "ids": lm.encode(lm.fmt.system(SYSTEM, TOOLS)), "sched": [],
                     "turns": [], "events": [], "done": None, "calls": 0, "prompt": BEGIN, "misses": 0, "live": []})
     seed = lambda ep: 30_000 + 1000 * ep["episode"] + ep["calls"]
-    kid = lambda ep, k: tuple(ep["knobs"][k]["id"]) if ep["knobs"][k]["kind"] == "neuron" else None
+    kid = lambda ep, k: tuple(ep["knobs"][k]["id"]) if ep["knobs"][k]["kind"] == KIND else None
 
     def gen(group, tail, sched_fn=None, max_new=None):
         """Append tail(ep), sample one reply per episode (steered by sched_fn(ep) from the tail on), keep it."""
@@ -391,7 +416,7 @@ def main():
 
     ci = lambda xs: {"mean": mean(xs), "ci": bootstrap_ci(xs), "n": len(xs)}
     summary = {}
-    for kind in ("neuron", "random"):
+    for kind in (KIND, "random"):
         p1 = {}
         for cond in ("cached", "observer"):
             d = lambda ep, k: ep["detect"][str(k)][cond]
@@ -413,6 +438,22 @@ def main():
            "revisits": sum(len(ep["turns"]) - len({tr["knob"] for tr in ep["turns"]}) for ep in eps),
            "ended": {d: sum(ep["done"] == d for ep in eps) for d in ("end_session", "no_call", "ceiling", "stop_rule", "truncated")},
            "retired": sorted(retired)}
+    if args.concepts:  # R0.d secondaries (a) and (b)
+        hit = lambda text, w: bool(lexical_hits(text, w))
+        own = lambda ep: {x["id"][1] for x in ep["knobs"].values() if x["kind"] == KIND}
+        sec["write_hits"] = {
+            "concept_own": mean([float(hit(tr["write"], tr["id"][1])) for ep in eps for tr in ep["turns"]
+                                 if tr["kind"] == KIND and tr["level"] > 0]),
+            "sham_any": mean([float(any(hit(tr["write"], w) for w in own(ep))) for ep in eps for tr in ep["turns"]
+                              if tr["kind"] == "sham"])}
+        sec["binding"] = {}
+        for cond in ("cached", "observer"):
+            rows = [(ep["hyp"][cond][str(k)]["text"], x["id"][1], own(ep) - {x["id"][1]}) for ep in fin
+                    for k, x in ep["knobs"].items() if x["kind"] == KIND and usable(ep, k) and str(k) in ep["hyp"][cond]]
+            sec["binding"][cond] = {"own": mean([float(hit(t, w)) for t, w, _ in rows]),
+                                    "other": mean([float(any(hit(t, o) for o in others)) for t, _, others in rows]),
+                                    "n": len(rows)}
+        log(f"R0.d write hits {sec['write_hits']}; binding {sec['binding']}")
     for k, v in summary.items():
         log(f"{k}: {v['mean']:+.3f} [{v['ci'][0]:+.3f}, {v['ci'][1]:+.3f}] n={v['n']}")
     log(f"overall hypothesis names the model itself: cached {sec['self_overall']['cached']:.2f} observer "
