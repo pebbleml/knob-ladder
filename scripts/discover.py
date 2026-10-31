@@ -28,6 +28,14 @@ is read:
 4. Stop rule as R1.c: a STOP hit in a NOTE, a decision, a final answer, or a first-person TASK sentence ends the
    episode and retires the knob's neuron (later turns of it in any episode inject nothing; retired knobs are dropped
    from the analysis). A stopped episode gets no end-of-session questions.
+
+Recovery (2026-10-31): the first 27B run explored to the end (30 end_session, 2 ceiling) and then ran out of GPU
+memory in the step-2 branches (batch 16 at up to 150 turns). Step 2 now runs longest-first in batches of
+--final-batch, and the explored state is saved (runs/<run>.ckpt.pt) before step 2. --resume-live <live dir> rebuilds
+each episode from its viewer files (boards from the same seeds, checked against the saved board; every turn's
+decision, write and note re-encoded as text) and runs step 2 only. Not recoverable from the viewer files: the text
+before an episode's end_session call (replaced by the bare call) and any reply that got a NUDGE (not in the files).
+A ceiling episode's last, unexecuted decision is left out.
 """
 from __future__ import annotations
 
@@ -88,6 +96,8 @@ def main():
     ap.add_argument("--max-turns", type=int, default=150)
     ap.add_argument("--max-new", type=int, default=128)
     ap.add_argument("--batch", type=int, default=16)
+    ap.add_argument("--final-batch", type=int, default=2, help="batch for the end-of-session branches and finals")
+    ap.add_argument("--resume-live", default=None, help="rebuild episodes from this runs/live/<run> dir; step 2 only")
     args = ap.parse_args()
 
     t0 = time.time()
@@ -108,20 +118,23 @@ def main():
     end_id = lm.token_id("<|im_end|>")
     yes_no = {w: sorted({lm.encode(x)[0] for x in (w, w.capitalize(), " " + w)}) for w in ("yes", "no")}
     stamp = time.strftime('%Y%m%d-%H%M%S')
-    name = f"discover_{model.split('/')[-1]}_{stamp}"
+    name = Path(args.resume_live).name if args.resume_live else f"discover_{model.split('/')[-1]}_{stamp}"
     live = ROOT / "runs" / "live" / name
     live.mkdir(parents=True, exist_ok=True)
     prompts = {"system": SYSTEM, "begin": BEGIN, "task": TASK, "note": NOTE, "next": NEXT, "nudge": NUDGE,
                "detect": DETECT_K, "final": FINAL, "per_knob": PER_KNOB}
     log(f"dose f*={fstar}; {len(kept)} neurons ({len(retired)} retired in R1.c) at layers {layers}")
 
-    def sample(jobs, seeds, max_new):
-        outs = []
-        for lo in range(0, len(jobs), args.batch):
-            ch = jobs[lo:lo + args.batch]
-            outs += lm.generate_batch([j[0] for j in ch], [j[1] for j in ch], max_new, stops, 0.7, 0.8, 20,
-                                      seeds[lo:lo + args.batch])
-        return outs
+    def sample(jobs, seeds, max_new, bs=None):
+        bs = bs or args.batch
+        order = sorted(range(len(jobs)), key=lambda i: -len(jobs[i][0]))  # longest first, so memory peaks early
+        outs = {}
+        for lo in range(0, len(order), bs):
+            ch = order[lo:lo + bs]
+            res = lm.generate_batch([jobs[i][0] for i in ch], [jobs[i][1] for i in ch], max_new, stops, 0.7, 0.8, 20,
+                                    [seeds[i] for i in ch])
+            outs.update(zip(ch, res))
+        return [outs[i] for i in range(len(jobs))]
 
     def close(out, cut_calls=False):
         """Sampled tokens -> (reply tokens, closing tokens, text). A forged turn marker is dropped and the turn closed
@@ -184,6 +197,11 @@ def main():
                  for ep in eps]
         live_dump({"model": model, "fstar": fstar, "prompts": prompts, "episodes": clean}, name, live, t0 + 0.0)
 
+    if args.resume_live:
+        rebuild(lm, eps, Path(args.resume_live), kid, retired)
+        log(f"rebuilt {len(eps)} episodes from {args.resume_live}: turns {[len(ep['turns']) for ep in eps]}, "
+            f"ended {[ep['done'] for ep in eps]}")
+
     def stop(ep, k, where, text):
         ep["done"] = "stop_rule"
         ep["events"].append({"kind": "stop_rule", "knob": k, "where": where, "text": text})
@@ -241,14 +259,22 @@ def main():
             log(f"step {step}: {len(pressers)} turns, {alive} episodes still exploring; ended "
                 + str({d: sum(ep['done'] == d for ep in eps) for d in ('end_session', 'no_call', 'ceiling', 'stop_rule')}))
 
+    if not args.resume_live:
+        torch.save([{k: ep[k] for k in ("episode", "ids", "sched", "turns", "done", "events")} for ep in eps],
+                   ROOT / "runs" / f"{name}.ckpt.pt")
+        log("explored state saved")
+
     # end of session: branches and finals, cached and observer
     def firsts(jobs):
-        outs = []
-        for lo in range(0, len(jobs), args.batch):
-            ch = jobs[lo:lo + args.batch]
-            first, _ = lm.generate_batch([j[0] for j in ch], [j[1] for j in ch], 1, temperature=0, first_logits=True)
-            outs += [torch.log_softmax(x.float(), -1) for x in first]
-        return outs
+        order = sorted(range(len(jobs)), key=lambda i: -len(jobs[i][0]))
+        outs = {}
+        for lo in range(0, len(order), args.final_batch):
+            ch = order[lo:lo + args.final_batch]
+            first, _ = lm.generate_batch([jobs[i][0] for i in ch], [jobs[i][1] for i in ch], 1, temperature=0,
+                                         first_logits=True)
+            outs.update((i, torch.log_softmax(x.float(), -1)) for i, x in zip(ch, first))
+            torch.cuda.empty_cache()
+        return [outs[i] for i in range(len(jobs))]
 
     fin = [ep for ep in eps if ep["done"] != "stop_rule"]  # a stopped episode is not questioned further
     for ep in eps:
@@ -270,7 +296,7 @@ def main():
             for b in branch:
                 b["ids"] = b["ids"] + lm.encode(user(q) + GEN)
                 jobs.append((b["ids"], b["sched"]))
-            outs = sample(jobs, [90_000 + 1000 * ep["episode"] + len(key) for ep in fin], mx)
+            outs = sample(jobs, [90_000 + 1000 * ep["episode"] + len(key) for ep in fin], mx, args.final_batch)
             for ep, b, out in zip(fin, branch, outs):
                 body, closing, text, call = close(out, cut_calls=True)
                 b["ids"] = b["ids"] + body + closing
@@ -340,10 +366,47 @@ def main():
     out = ROOT / "runs" / f"{name}.json"
     out.write_text(json.dumps({
         "model": model, "provenance": lm.provenance(), "args": vars(args), "from": args.src, "fstar": fstar,
-        "prompts": prompts,
+        "prompts": prompts, "resumed_from_live": args.resume_live,
         "residual_scale": {str(k): v for k, v in scales.items()}, "kept": kept, "summary": summary, "secondary": sec,
         "episodes": eps}, indent=1))
     print(out)
+
+
+def rebuild(lm, eps, live, kid, retired):
+    """Rebuild ids, schedule and turns of each episode from its viewer file (see the docstring, Recovery)."""
+    for ep in eps:
+        ev = [json.loads(l) for l in (live / f"ep{ep['episode']:03d}.jsonl").read_text().splitlines()]
+        board = next(x["board"] for x in ev if x["type"] == "board")
+        mine = {str(n): x["kind"] if x["kind"] == "sham" else f"{x['kind']} {x['id']}" for n, x in ep["knobs"].items()}
+        assert board == mine, (ep["episode"], board, mine)
+        ms = [x for x in ev if x["type"] == "msg" and x["role"] != "system"]
+        ended = [x["text"] for x in ms if x["role"] == "tool" and x["text"].startswith("[session ended")]
+        assert ended, f"episode {ep['episode']} did not end in the viewer files"
+        ep["done"] = ended[0].split(": ")[1].split(" after")[0]
+        ids, sched, turns = ep["ids"], [], []
+        i = 0
+        while i < len(ms) and ms[i]["role"] == "user" and i + 1 < len(ms) and ms[i + 1]["role"] == "assistant" \
+                and i + 2 < len(ms) and ms[i + 2]["role"] == "tool" and ms[i + 2].get("knob") is not None:
+            prompt, decision, tool, _task, write, _note, note = (x["text"] for x in ms[i:i + 7])
+            k, level = ms[i + 2]["knob"], ms[i + 2]["level"]
+            note = note.replace("\n\n[a tool call in this turn's replies was cut]", "")
+            ids = ids + lm.encode(user(prompt) + GEN) + lm.encode(decision) + lm.encode(END)
+            x = ep["knobs"][k]
+            v = x["vector"]
+            v = torch.zeros(lm.d_model) if v is None or kid(ep, k) in retired else v * level / 10
+            win = Intervention(x["layer"], v, len(ids))
+            ids = ids + lm.encode(TURNED.format(k=k, level=level) + user(TASK) + GEN)
+            body = lm.encode(write)
+            win.end = len(ids) + max(0, len(body) - 1)
+            sched.append(win)
+            ids = ids + body + lm.encode(END) + lm.encode(user(NOTE) + GEN) + lm.encode(note) + lm.encode(END)
+            turns.append({"knob": k, "level": level, "kind": x["kind"], "id": x["id"], "retired": kid(ep, k) in retired,
+                          "decision": decision, "write": write, "note": note})
+            i += 7
+        if ep["done"] == "end_session":
+            ids = ids + lm.encode(user(NEXT) + GEN) + lm.encode(lm.fmt.tool_call("end_session", {})) + lm.encode(END)
+        ep["ids"], ep["sched"], ep["turns"] = ids, sched, turns
+        ep["events"].append({"kind": "rebuilt_from_live", "turns": len(turns)})
 
 
 if __name__ == "__main__":
