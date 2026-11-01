@@ -33,6 +33,9 @@ Judge (secondary): a separate, fresh instance reads one message with no task or 
   (c - foil) for each message, c50 minus none, per agent, and on the clean subset. Representation D > 0 with judge
   near 0 on clean messages would be a channel the text carries that the model does not report. Concept words appear
   only in the judge's prompt, never in any agent's context.
+Added after the 0.8B smoke test only (no 27B output read): the smoke run's random-direction chains also drift on the
+  item's concept (D near +0.025 at every hop), so a secondary "c50 - rand" contrast (D(c50) - D(rand), paired by
+  item) is reported for every agent and site at L44, P1's site included.
 Deviation note: no paraphrase or shuffle control in this first run; a text-only baseline is the clean subset plus
   the judge, not a probe trained on the text.
 """
@@ -239,6 +242,9 @@ def main():
             if l == SL:
                 log(f"curve {c} L{l}: " + " | ".join(f"{s} {r['mean']:+.3f}" + ("*" if r["ci"][0] > 0 or r["ci"][1] < 0 else "")
                                                      for s, r in row.items()))
+    res["c50-rand"] = {f"A{k} {site}": ci([x - y for x, y in zip(D("c50", k, site, SL), D("rand", k, site, SL))])
+                       for k in range(1, HOPS + 1) for site in ("reading", "writing") if D("c50", k, site, SL)}
+    log("c50 - rand: " + " | ".join(f"{s} {fmt(r)}" for s, r in res["c50-rand"].items()))
     res["clean"] = {"A2 reading, m1 clean": ci(D("c50", 2, "reading", SL, clean1)),
                     "A2 writing, m1-m2 clean": ci(D("c50", 2, "writing", SL, clean2)),
                     "A3 writing, m1-m3 clean": res["P2"], "n": [len(clean1), len(clean2), len(clean3)]}
