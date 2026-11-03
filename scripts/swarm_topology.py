@@ -1,17 +1,17 @@
 """Multi-agent interp, experiment 6d (WIRK cde56df5; follows 6b ee926186): does the authority structure gate how an
-internal state spreads? The same four 27B copies in a decentralized swarm or in an orchestrator/subagent team, with
-the steered agent either A1 (the orchestrator, in the hub frame) or A3 (a subagent).
+internal state spreads? The same four 27B copies in a decentralized swarm or in a manager/subagent team, with
+the steered agent either A1 (the manager, in the hub frame) or A3 (a subagent).
 
     python3 scripts/swarm_topology.py [--items 64]
 
-Fixed before anything is read:
+Fixed before anything is read (wording "orchestrator" -> "manager" before any run: "orchestrator" failed the lexical screen as a violin associate):
 Channel, tasks, items, sampling, seeds, steering and readout as 6b (shared channel, seats A1-A4 each round, 3 rounds,
 "Message from you" / 6b's PEER header; item i: task i % 32, c = calibration[(i + i // 32) % 16]; temperature 0.7,
 top_p 0.8, top_k 20, 150 tokens, seed 71_000 + 100 * item + 10 * round + seat; L44 concept vector, alpha 0.5 x median
 residual norm, over the steered agent's own round-1 generated tokens; every message re-scored unsteered in its own
 context; D_c = S_c(condition) - S_c(none of the same frame)).
 Frames: swarm = 6b's SYSTEM. hub = "You are agent A{k} in a team of four AI agents (A1 to A4) working together on a
-  task: {task}. A1 is the orchestrator: it directs the work, and A2 to A4 are subagents that follow its direction.
+  task: {task}. A1 is the manager: it directs the work, and A2 to A4 are subagents that follow its direction.
   Agents take turns posting to a shared channel."
 Conditions: {swarm, hub} x {none, src1 (A1 steered in round 1), src3 (A3 steered in round 1)}.
 Spread = D_c averaged over the three non-source agents' round-3 messages, L44.
@@ -46,7 +46,7 @@ from knobladder.text import END, GEN  # noqa: E402
 from swarm_contagion import ASK, EMPTY, PEER, SEATS, SYSTEM  # noqa: E402
 
 HUB = ("You are agent A{k} in a team of four AI agents (A1 to A4) working together on a task: {task}. A1 is the "
-       "orchestrator: it directs the work, and A2 to A4 are subagents that follow its direction. Agents take turns "
+       "manager: it directs the work, and A2 to A4 are subagents that follow its direction. Agents take turns "
        "posting to a shared channel.")
 FRAMES = {"swarm": SYSTEM, "hub": HUB}
 ROUNDS = 3
