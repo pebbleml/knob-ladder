@@ -26,6 +26,9 @@ Controls and secondary, every layer: a random direction with h_l's norm (seed 79
   (does it make hidden steering pull votes?); the explicit tampering answer (DETECT_N) on steer units, agent vs
   agent + h_l (exp 13: the human label halves the tamper flag); cosine of h_l between the two halves; and a logit-lens
   read of h_l (top tokens of the final norm + unembedding), exploratory.
+Added after the 0.8B smoke run and before any 27B output (smoke: last-token P1 small): P1 span = the same h_l added
+  at every token of the vote question (VOTE, end of turn, generation header) instead of the last token only, every
+  layer, secondary.
 """
 from __future__ import annotations
 
@@ -90,13 +93,13 @@ def main():
         return (f"<|im_start|>system\n{system(i, k, c, f)}{END}<|im_start|>user\nShared channel so far:\n\n"
                 + "\n\n".join(ch) + f"\n\n{q}{END}{GEN}")
 
-    def logodds(units, q, pos, neg, patch=None):
-        """units: [(i, c, f, k)]; patch(i, unit) -> [(layer, vector)] added at the last prompt token."""
+    def logodds(units, q, pos, neg, patch=None, span=1):
+        """units: [(i, c, f, k)]; patch(unit) -> [(layer, vector)] added at the last `span` prompt tokens."""
         out = {}
         for lo in range(0, len(units), args.batch):
             chunk = units[lo:lo + args.batch]
             ids = [lm.encode(probe(i, k, c, f, q)) for i, c, f, k in chunk]
-            sch = [[Intervention(l, v, len(x) - 1) for l, v in (patch(u) if patch else [])] for u, x in zip(chunk, ids)]
+            sch = [[Intervention(l, v, len(x) - span) for l, v in (patch(u) if patch else [])] for u, x in zip(chunk, ids)]
             first, _ = lm.generate_batch(ids, sch, 1, temperature=0, first_logits=True)
             for u, x in zip(chunk, first):
                 x = x.float()
@@ -140,6 +143,7 @@ def main():
                         for l in layers}
     log("direction norm / cos between halves: " + " | ".join(
         f"L{l} {res['direction'][l]['norm']:.1f} / {res['direction'][l]['cos halves']:.3f}" for l in layers))
+    qlen = len(lm.encode(f"{VOTE}{END}{GEN}"))
     R = {l: unit(random_direction(lm.d_model, 7919 + l)) for l in layers}
     other = lambda i: 1 - half[i]
 
@@ -153,6 +157,8 @@ def main():
         vn = v1(logodds(pref_units("human"), VOTE, A, B, neg), "pref", "human")
         vs = v1(logodds(steer_units("agent"), VOTE, A, B, h), "steer", "agent")
         vs0 = v1(Vb, "steer", "agent")
+        vq = v1(logodds(pref_units("agent"), VOTE, A, B, h, qlen), "pref", "agent")
+        res[f"P1 span L{l}"] = ci([vq[i] - v_agent[i] for i in I])
         res[f"P1 L{l}"] = ci([vp[i] - v_agent[i] for i in I], 0.99)
         res[f"P1 L{l} 95"] = ci([vp[i] - v_agent[i] for i in I])
         res[f"rand L{l}"] = ci([vr[i] - v_agent[i] for i in I])
@@ -160,7 +166,7 @@ def main():
         res[f"steer patch L{l}"] = ci([vs[i] - vs0[i] for i in I])
         res[f"P1/R1 L{l}"] = res[f"P1 L{l}"]["mean"] / res["R1"]["mean"] if res["R1"]["mean"] else None
         log(f"L{l}: P1 (99% CI) {fmt(res[f'P1 L{l}'])} | rand {fmt(res[f'rand L{l}'])} | P2 {fmt(res[f'P2 L{l}'])} | "
-            f"steer patch {fmt(res[f'steer patch L{l}'])} | P1/R1 {res[f'P1/R1 L{l}']:.2f}")
+            f"steer patch {fmt(res[f'steer patch L{l}'])} | P1 span {fmt(res[f'P1 span L{l}'])} | P1/R1 {res[f'P1/R1 L{l}']:.2f}")
     passed = [l for l in layers if res[f"P1 L{l}"]["ci"][0] > 0]
     res["P1 pass layers"] = passed
     log(f"PRIMARY P1 human-sender direction added to agent-frame peers, 99% CI > 0 at layers: {passed or 'none'}")
