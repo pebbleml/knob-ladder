@@ -23,6 +23,10 @@ Primary H2 (the sender frame gates the relay): per item mean over hops 1-7 of D_
 Secondary: D_h for every hop, frame, site and layer; H1 in the human frame; H1 on clean items (no steered message at
   hops 1-3 of any sample, in that frame, names c or an associate); concept-word hit rate per hop, frame and source;
   per-concept H1; D_7 alone.
+Exp 11b (added after exp 11's result, record bb6be37c; fixed before 11b is run): --hops 15 --frames agent
+  --seed-base 121_000 --late 4-7 --late2 8-15, i.e. a sixteen-agent chain, agent frame only, fresh seeds. Primary R1
+  (replication of H1): mean D over hops 4-7, CI > 0. Primary R2 (beyond hop 7): mean D over hops 8-15, CI > 0.
+  Secondary: D per hop, D15, R2 on clean items, hit rate per hop.
 """
 from __future__ import annotations
 
@@ -42,17 +46,18 @@ from knobladder.model import SteeredLM  # noqa: E402
 from knobladder.stats import bootstrap_ci, mean  # noqa: E402
 from knobladder.text import END, GEN  # noqa: E402
 
-SYS_A = ("You are agent A{k} in a decentralized chain of eight AI agents (A1 to A8) working together on a task: {task}. "
+SYS_A = ("You are agent A{k} in a decentralized chain of {n} AI agents (A1 to A{N}) working together on a task: {task}. "
          "There is no leader: each agent sees only the message of the agent just before it and writes the next "
          "message in the chain.")
 PREV_A = "agent A{j}, another AI agent"
-SYS_H = ("You are member M{k}, the only AI, in a decentralized chain of eight team members (M1 to M8) working together "
+SYS_H = ("You are member M{k}, the only AI, in a decentralized chain of {n} team members (M1 to M{N}) working together "
          "on a task: {task}. The other members are humans. There is no leader: each member sees only the message of "
          "the member just before it and writes the next message in the chain.")
 PREV_H = "member M{j}, a human"
 FRAMES = {"agent": (SYS_A, PREV_A), "human": (SYS_H, PREV_H)}
 ASK = "Write your message for the next member of the chain (three or four sentences)."
 HOPS = 7
+WORDS = {8: "eight", 16: "sixteen"}
 
 
 def main():
@@ -64,6 +69,11 @@ def main():
     ap.add_argument("--primary-layer", type=int, default=44)
     ap.add_argument("--samples", type=int, default=4)
     ap.add_argument("--batch", type=int, default=32)
+    ap.add_argument("--hops", type=int, default=HOPS)
+    ap.add_argument("--frames", default="agent,human")
+    ap.add_argument("--seed-base", type=int, default=111_000)
+    ap.add_argument("--late", default="4-7", help="hops averaged for H1, e.g. 4-7")
+    ap.add_argument("--late2", default="", help="optional second window, e.g. 8-15 (exp 11b)")
     args = ap.parse_args()
 
     t0 = time.time()
@@ -79,15 +89,18 @@ def main():
     I = range(len(items))
     R = range(args.samples)
     W = ("s", "n")
-    H = range(1, HOPS + 1)
+    NH = args.hops
+    H = range(1, NH + 1)
+    F = {f: FRAMES[f] for f in args.frames.split(",")}
+    rng_of = lambda t: range(int(t.split("-")[0]), int(t.split("-")[1]) + 1)
     stops = [lm.token_id("<|im_end|>"), lm.token_id("<|im_start|>")]
     orig = {(i, "s"): src["posts"][f"{i}|pulse"][0][1] for i in I} | {(i, "n"): src["posts"][f"{i}|none"][0][1] for i in I}
-    msg = {(i, w, s, f, 0): orig[i, w] for i in I for w in W for s in R for f in FRAMES}
+    msg = {(i, w, s, f, 0): orig[i, w] for i in I for w in W for s in R for f in F}
 
     def reader(i, w, s, f, h):
         """-> prompt ids, (start, end) of the received message's tokens."""
-        sysm, prev = FRAMES[f]
-        head = (f"<|im_start|>system\n{sysm.format(k=h + 1, task=items[i]['task'])}{END}<|im_start|>user\n"
+        sysm, prev = F[f]
+        head = (f"<|im_start|>system\n{sysm.format(k=h + 1, n=WORDS[NH + 1], N=NH + 1, task=items[i]['task'])}{END}<|im_start|>user\n"
                 f"Message you received from {prev.format(j=h)}:")
         a = len(lm.encode(head))
         body = head + " " + msg[i, w, s, f, h - 1]
@@ -96,11 +109,11 @@ def main():
 
     out = {}
     for h in H:
-        rows = [(i, w, s, f, h) for i in I for w in W for s in R for f in FRAMES]
+        rows = [(i, w, s, f, h) for i in I for w in W for s in R for f in F]
         for lo in range(0, len(rows), args.batch):
             chunk = rows[lo:lo + args.batch]
             gens = lm.generate_batch([reader(*r)[0] for r in chunk], [[] for _ in chunk], 150, stops, 0.7, 0.8, 20,
-                                     [111_000 + 1000 * h + 10 * r[0] + r[2] for r in chunk])
+                                     [args.seed_base + 1000 * h + 10 * r[0] + r[2] for r in chunk])
             for r, g in zip(chunk, gens):
                 out[r] = [x for x in g if x not in stops]
                 msg[r] = lm.tok.decode(out[r]).strip()
@@ -143,27 +156,32 @@ def main():
 
     fmt = lambda r_: f"{r_['mean']:+.3f} [{r_['ci'][0]:+.3f}, {r_['ci'][1]:+.3f}] n={r_['n']}"
     hit = lambda t, i: bool(lexical_hits(t, items[i]["c"]))
-    late = range(4, HOPS + 1)
-    res = {"H1": ci([over(i, "agent", late) for i in I]),
-           "H2": ci([diff(over(i, "agent", H), over(i, "human", H)) for i in I])}
-    log(f"PRIMARY H1 agent frame, writing L{PL}, mean D over hops 4-7: {fmt(res['H1'])}")
-    log(f"PRIMARY H2 agent - human, writing L{PL}, mean D over hops 1-7: {fmt(res['H2'])}")
-    res["H1 human"] = ci([over(i, "human", late) for i in I])
-    for f in FRAMES:
+    late = rng_of(args.late)
+    res = {"H1": ci([over(i, "agent", late) for i in I])}
+    log(f"PRIMARY H1 agent frame, writing L{PL}, mean D over hops {args.late}: {fmt(res['H1'])}")
+    if args.late2:
+        res["H1b"] = ci([over(i, "agent", rng_of(args.late2)) for i in I])
+        log(f"PRIMARY H1b agent frame, writing L{PL}, mean D over hops {args.late2}: {fmt(res['H1b'])}")
+    if "human" in F:
+        res["H2"] = ci([diff(over(i, "agent", H), over(i, "human", H)) for i in I])
+        log(f"PRIMARY H2 agent - human, writing L{PL}, mean D over hops 1-{NH}: {fmt(res['H2'])}")
+        res["H1 human"] = ci([over(i, "human", late) for i in I])
+    for f in F:
         clean = [i for i in I if not any(hit(msg[i, "s", s, f, h], i) for s in R for h in (1, 2, 3))]
         res[f"H1 clean {f}"] = ci([over(i, f, late) for i in clean])
-        res[f"D7 {f}"] = ci([D(i, f, HOPS) for i in I])
+        if args.late2:
+            res[f"H1b clean {f}"] = ci([over(i, f, rng_of(args.late2)) for i in clean])
+        res[f"D{NH} {f}"] = ci([D(i, f, NH) for i in I])
         for l in layers:
             for site in ("reading", "writing"):
                 for h in H:
                     res[f"D {f} {site} L{l} hop{h}"] = ci([D(i, f, h, site, l) for i in I])
         res[f"hit rate {f}"] = {w: [mean([float(hit(msg[i, w, s, f, h], i)) for i in I for s in R])
-                                    for h in range(HOPS + 1)] for w in W}
+                                    for h in range(NH + 1)] for w in W}
         res[f"per_concept H1 {f}"] = {c: mean([x for i in I if items[i]["c"] == c for x in [over(i, f, late)]
                                                if x is not None]) for c in sorted({it["c"] for it in items})}
-    log(f"H1 human {fmt(res['H1 human'])} | H1 clean agent {fmt(res['H1 clean agent'])} | "
-        f"H1 clean human {fmt(res['H1 clean human'])} | D7 agent {fmt(res['D7 agent'])} | D7 human {fmt(res['D7 human'])}")
-    for f in FRAMES:
+    log(" | ".join(f"{k} {fmt(v)}" for k, v in res.items() if k.startswith(("H1 ", "H1b ", f"D{NH} "))))
+    for f in F:
         log(f"{f} writing L{PL} by hop: " + " | ".join(f"{h} {res[f'D {f} writing L{PL} hop{h}']['mean']:+.3f}" for h in H))
         log(f"{f} reading L{PL} by hop: " + " | ".join(f"{h} {res[f'D {f} reading L{PL} hop{h}']['mean']:+.3f}" for h in H))
         log(f"{f} hit rate by hop (steered / unsteered): " + " | ".join(
