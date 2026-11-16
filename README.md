@@ -5,7 +5,7 @@ controlled experiments on open-weight models (mainly Qwen3.8-27B), steering acti
 SwiGLU neurons and asking the model what changed. Nulls and corrections are reported alongside passes.
 
 - **Results, transcripts and logs (public):** https://knob-ladder-runs.pages.dev
-- **Run data:** Hugging Face dataset `stone-pebble/knob-ladder-runs` (raw run JSON and logs)
+- **Run data:** Hugging Face dataset `pebbleml/knob-ladder-runs` (raw run JSON and logs)
 - **Plan, decisions, pre-registrations, tickets:** WIRK wirkspace `machine consciousness` (283326b9).
   Ask Sam Larson or Andres Campero for an invite; start with the "Start here" record `a069eaab`.
 - **Run on a GPU box:** `scripts/remote.sh ubuntu@HOST setup`, then `scripts/remote.sh ubuntu@HOST run ...`.
