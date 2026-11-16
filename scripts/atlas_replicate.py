@@ -13,6 +13,14 @@ any new generation is read:
 4. A primary pole replicates if, at f0.5, own >= 0.25, spec > 0 and dNLL <= 0.5 (atlas_gen's rule) and its own-word
    rate beats random (paired bootstrap CI over generations above 0). -neuron tells a concept write from a generic
    kick at that neuron.
+
+Reading-only rerun (2026-11-10, WIRK pre-registration written before it runs; queue job 078):
+    python3 scripts/atlas_replicate.py --atlas runs/atlas_Qwen3.8-27B_20261030-162055.json --top 3 --reps 8 \
+        --steer-tokens 0 --seed-offset 2000000 --fracs 0.5,1 --tag _read
+With --steer-tokens 0 the push covers only the passage and the OBSERVE turn: nothing the model writes is steered, so a
+snow / whale mention cannot be a steered word and must come from how it took in the passage (held in its cache). Same
+rule as above (at f0.5: own >= 0.25, spec > 0, dNLL <= 0.5, own - random CI > 0) = "carries into perception"; f1 is
+secondary. 64 generations per cell (8 passages x 8 reps), fresh seeds.
 """
 from __future__ import annotations
 
@@ -45,6 +53,9 @@ def main():
     ap.add_argument("--reps", type=int, default=4)
     ap.add_argument("--fracs", default="0.25,0.5,1")
     ap.add_argument("--batch", type=int, default=32)
+    ap.add_argument("--steer-tokens", type=int, default=None, help="generated tokens steered (default: the atlas's)")
+    ap.add_argument("--seed-offset", type=int, default=10 ** 6)
+    ap.add_argument("--tag", default="")
     args = ap.parse_args()
 
     t0 = time.time()
@@ -71,7 +82,8 @@ def main():
         tr.append(lm, user(OBSERVE) + lm.fmt.gen_think)
         prompts.append((list(tr.ids), window))
     trials = [(p, r) for p in range(len(prompts)) for r in range(args.reps)]
-    seed = lambda p, r, w: 10 ** 6 + 1000 * p + 100 * r + words.index(w)
+    seed = lambda p, r, w: args.seed_offset + 1000 * p + 100 * r + words.index(w)
+    steer_tokens = atlas["steer_tokens"] if args.steer_tokens is None else args.steer_tokens
 
     def run(jobs):
         """jobs: (passage, rep, word, layer, vector or None) -> one row each."""
@@ -79,7 +91,7 @@ def main():
         for lo in range(0, len(jobs), args.batch):
             chunk = jobs[lo:lo + args.batch]
             ids = [prompts[p][0] for p, *_ in chunk]
-            scheds = [[] if v is None else [Intervention(l, v, prompts[p][1][0], len(prompts[p][0]) + atlas["steer_tokens"])]
+            scheds = [[] if v is None else [Intervention(l, v, prompts[p][1][0], len(prompts[p][0]) + steer_tokens)]
                       for p, _, _, l, v in chunk]
             outs = lm.generate_batch(ids, scheds, atlas["max_new"], stops, hp["temperature"], hp["top_p"], hp["top_k"],
                                      [seed(p, r, w) for p, r, w, *_ in chunk])
@@ -132,9 +144,9 @@ def main():
 
     prim = [r for r in out_poles if r["primary"]]
     print(f"primary replicated: {sum(r['replicates'] for r in prim)}/{len(prim)}", flush=True)
-    out = ROOT / "runs" / f"atlas_rep_{atlas['model'].split('/')[-1]}_{time.strftime('%Y%m%d-%H%M%S')}.json"
+    out = ROOT / "runs" / f"atlas_rep{args.tag}_{atlas['model'].split('/')[-1]}_{time.strftime('%Y%m%d-%H%M%S')}.json"
     out.write_text(json.dumps({"atlas": args.atlas, "model": atlas["model"], "provenance": lm.provenance(), "reps": args.reps,
-                               "fracs": fracs, "residual_scale": scales, "poles": out_poles}, indent=1))
+                               "steer_tokens": steer_tokens, "seed_offset": args.seed_offset, "fracs": fracs, "residual_scale": scales, "poles": out_poles}, indent=1))
     print(out)
 
 

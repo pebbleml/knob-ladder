@@ -1,4 +1,21 @@
-# Knob ladder
+# Knob ladder: introspection experiments on open models
+
+Can a model notice, report, use and prefer its own internal states? We test this with pre-registered,
+controlled experiments on open-weight models (mainly Qwen3.8-27B), steering activations and single
+SwiGLU neurons and asking the model what changed. Nulls and corrections are reported alongside passes.
+
+- **Results, transcripts and logs (public):** https://knob-ladder-runs.pages.dev
+- **Run data:** Hugging Face dataset `stone-pebble/knob-ladder-runs` (raw run JSON and logs)
+- **Plan, decisions, pre-registrations, tickets:** WIRK wirkspace `machine consciousness` (283326b9).
+  Ask Sam Larson or Andres Campero for an invite; start with the "Start here" record `a069eaab`.
+- **Run on a GPU box:** `scripts/remote.sh ubuntu@HOST setup`, then `scripts/remote.sh ubuntu@HOST run ...`.
+  Models are only ever downloaded and run on remote GPUs.
+
+Pull requests that finish a WIRK ticket should say `Wirk-Completes: <ticket id>` in the description.
+
+Code is MIT-licensed (see LICENSE).
+
+---
 
 Can a model learn, prefer and own its own activations? Spec and research: WIRK wirkspace
 `machine consciousness` (283326b9), item `b6b8e429`. This repo is rung R0 (`ec8dd353`), now at v3.

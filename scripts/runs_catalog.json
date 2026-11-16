@@ -1,0 +1,1728 @@
+{
+ "tracks": [
+  {
+   "id": "self",
+   "title": "Self-awareness program v2 (Nov 2026)",
+   "blurb": "Can the model notice a concept injected into its own activations, and does evaluating its own evaluation, or seeing a readout of its own activations, help? Plan: WIRK 8324b899."
+  },
+  {
+   "id": "swarm",
+   "title": "Multi-agent swarm experiments",
+   "blurb": "Copies of one model working in a group. What moves through the group, and who gets believed?"
+  },
+  {
+   "id": "ladder",
+   "title": "Knob ladder",
+   "blurb": "The original question: can a model notice or use changes to its own internal state? The first positive result is in the self-awareness track (P0)."
+  }
+ ],
+ "series": [
+  {
+   "id": "introspect",
+   "track": "self",
+   "title": "Injected-thought detection and recursive self-evaluation"
+  },
+  {
+   "id": "labels",
+   "track": "swarm",
+   "title": "Who is speaking: human and agent labels"
+  },
+  {
+   "id": "rank",
+   "track": "swarm",
+   "title": "Rank and roles"
+  },
+  {
+   "id": "self",
+   "track": "swarm",
+   "title": "Self, copies and secrets"
+  },
+  {
+   "id": "spread",
+   "track": "swarm",
+   "title": "How a hidden state spreads"
+  },
+  {
+   "id": "detect",
+   "track": "swarm",
+   "title": "Votes and spotting the altered agent"
+  },
+  {
+   "id": "ladder-main",
+   "track": "ladder",
+   "title": "Ladder experiments"
+  },
+  {
+   "id": "ladder-setup",
+   "track": "ladder",
+   "title": "Setup and calibration"
+  }
+ ],
+ "experiments": [
+  {
+   "id": "p0",
+   "series": "introspect",
+   "title": "P0: Does it notice an injected thought?",
+   "question": "If a concept vector is added to the residual stream, does Qwen3.8-27B say it detects an injected thought and name the concept, while never claiming one on clean trials?",
+   "iterations": [
+    {
+     "id": "p0",
+     "script": "introspect_detect",
+     "match": "^introspect_detect_Qwen",
+     "wirk_id": "34dffc48",
+     "outcome": "null",
+     "headline": "Not passed (underpowered): best held-out cell L35 a1.0 hit 0.08 [0.00, 0.20], 0/100 false alarms. Detection only at mid depth (L35-44); at L49-54 the concept takes over free association (up to 76%) with zero detection.",
+     "changed": "Lindsey-style injected-thought test; 7 layers x 6 strengths, cell picked on 25 words and scored on 25 held-out words.",
+     "tags": [
+      "concept injection",
+      "detect + identify",
+      "judge: same model, unsteered",
+      "held-out words"
+     ]
+    },
+    {
+     "id": "p0b",
+     "script": "introspect_detect",
+     "match": "^introspect_detect_confirm_Qwen3\\.8",
+     "compare_to": "p0",
+     "wirk_id": "0ecfcb0e",
+     "outcome": "positive",
+     "headline": "Passed its pre-declared test: at L40 a0.75 the model detects and names the injected concept on 12% [8, 17] of held-out trials, 0/400 false alarms, coherence 0.96. In 22/24 hits it claims detection before the word appears.",
+     "changed": "Only the two best cells, 8x the samples, fresh seeds.",
+     "tags": [
+      "confirmation",
+      "powered",
+      "fresh seeds"
+     ]
+    },
+    {
+     "id": "p0c",
+     "script": "introspect_detect",
+     "match": "^introspect_detect_random_",
+     "compare_to": "p0b",
+     "wirk_id": "0ecfcb0e",
+     "outcome": "positive",
+     "headline": "Random directions at the same strength: 1.75% claim an injected thought (vs 22% for concepts). Detection is concept-specific.",
+     "changed": "Concept vectors replaced by random directions.",
+     "tags": [
+      "control: random direction"
+     ]
+    },
+    {
+     "id": "p0t",
+     "script": "introspect_detect",
+     "match": "^introspect_detect_(think|nothink)_",
+     "compare_to": "p0b",
+     "outcome": "null",
+     "headline": "Thinking first does not help. Held-out hit 0.105 with thinking vs 0.110 without: difference -0.005 [-0.065, 0.055]. FA 0/100. 40% of injected thoughts never finish within 3000 tokens; the injection derails the reasoning rather than sharpening it.",
+     "changed": "Thinking mode on (the model reasons about its own state before answering), plus a matched no-thinking run.",
+     "tags": [
+      "thinking mode",
+      "recursion",
+      "pre-registered"
+     ]
+    },
+    {
+     "id": "p0x",
+     "script": "introspect_detect",
+     "match": "^introspect_detect_(xfer|sweep|confirm)_Qwen3-",
+     "compare_to": "p0b",
+     "wirk_id": "f5070720",
+     "outcome": "positive",
+     "headline": "Transfer across sizes: passes on Qwen3-8B (weakly, hit 0.04) and, at its own depth, on Qwen3-32B. The 27B's depth fails on 32B, but a sweep found L49 (0.77 depth), and a fresh-seed confirmation passed: held-out hit 0.115 [0.075, 0.16], 0/400 false alarms (WIRK 5bc08b55).",
+     "changed": "Different models (earlier dense Qwen3 generation), same cell and procedure.",
+     "tags": [
+      "replication",
+      "new model: Qwen3-32B, Qwen3-8B"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "p1",
+   "series": "introspect",
+   "title": "P1: Evaluating the evaluation",
+   "question": "While a concept is injected during a GSM8K answer, does a second, reflective self-examination (L2) separate injected from clean trials better than the first self-report (L1)?",
+   "iterations": [
+    {
+     "id": "p1",
+     "script": "introspect_recursive",
+     "match": "^introspect_recursive_",
+     "wirk_id": "8324b899",
+     "outcome": "null",
+     "headline": "Not supported: a reflective second pass does not improve detection (meta minus L1 AUROC -0.06 [-0.12, -0.003]). After-the-fact 'detection' (AUROC 0.82) mostly reads its own damaged answer: 0.63 [0.50, 0.75] on clean answers.",
+     "changed": "Recursive L0 answer, L1 self-report, L2 meta-evaluation vs a plain repeat; inject, random-direction and sham conditions.",
+     "tags": [
+      "recursion: L1 -> L2",
+      "control: random direction",
+      "control: sham",
+      "GSM8K"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "p2",
+   "series": "introspect",
+   "title": "P2: The activation mirror",
+   "question": "If the model is shown a readout of its own activations after each answer and reflects on it, does it get better at noticing injections on a later trial with no readout?",
+   "iterations": [
+    {
+     "id": "p2",
+     "script": "introspect_mirror",
+     "match": "^introspect_mirror_",
+     "wirk_id": "8324b899",
+     "outcome": "null",
+     "headline": "Not supported: practice with a perfect readout of its own activations makes the later no-readout trial worse (AUROC -0.13 [-0.23, -0.04] vs no readout). Any readout, even shuffled, just makes it say 'Yes' more often, on clean trials too.",
+     "changed": "Multi-trial sessions with a true, shuffled, yoked or absent readout; the last trial has no readout.",
+     "tags": [
+      "mirror: true / shuffled / yoked / none",
+      "transfer test",
+      "recursion with data"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "p3",
+   "series": "introspect",
+   "title": "P3: Detection neurons",
+   "question": "Which MLP neurons carry 'I detect an injected thought', and does switching them off remove detection while the concept still gets through?",
+   "iterations": [
+    {
+     "id": "p3",
+     "script": "introspect_neurons",
+     "match": "^introspect_neurons_Qwen",
+     "wirk_id": "e7b04740",
+     "outcome": "null",
+     "headline": "Primary not supported: hit random100 - top100 = +0.04 [-0.015, +0.095]. Exploratory: ablating those 100 neurons halves detection claims (0.195 to 0.105, +0.09 [+0.025, +0.16]) while the concept still reaches free association (0.495 vs 0.48). Confirmation P3b queued.",
+     "changed": "Neurons ranked on selection words, ablation tested on held-out words.",
+     "tags": [
+      "neurons",
+      "mean ablation",
+      "control: random neurons",
+      "held-out words"
+     ]
+    },
+    {
+     "id": "p3b",
+     "script": "introspect_neurons",
+     "match": "^introspect_neurons_confirm_",
+     "compare_to": "p3",
+     "wirk_id": "f5e3f428",
+     "outcome": "positive",
+     "headline": "Confirmed: switching off 100 late-layer neurons halves the model's report of an injected thought (detect 0.095 vs 0.203, +0.108 [+0.070, +0.147]), while the concept still reaches free association (0.495 vs 0.492). The report and the content travel by separate routes.",
+     "changed": "Primary switched to detect rate, 3x the samples, k = 100 and 1000.",
+     "tags": [
+      "confirmation",
+      "neurons"
+     ]
+    },
+    {
+     "id": "p3c",
+     "script": "introspect_neurons_drive",
+     "match": "^introspect_drive_Qwen",
+     "compare_to": "p3b",
+     "wirk_id": "684b9ef0",
+     "outcome": "null",
+     "headline": "Not sufficient: with nothing injected, clamping the same 100 neurons to their injected-state value never produced a detection report (0/400 at 1x and 2x dose; random neurons 0/400). The first-token yes-logit does rise with dose (-3.75 to -2.88 to -1.88; random flat), but not enough to flip the reply.",
+     "changed": "Drive instead of ablate: clamp the P3b neurons to their injected state on no-injection trials.",
+     "tags": [
+      "neurons",
+      "sufficiency",
+      "control: random neurons"
+     ]
+    },
+    {
+     "id": "p3d",
+     "script": "scripts/introspect_neurons_yes.py",
+     "match": "^introspect_neurons_yes_",
+     "wirk_id": "c6056e45",
+     "outcome": "positive",
+     "headline": "Generic yes-bias found: switching off the 100 'detection' neurons lowers 'Yes' on unrelated questions by 0.82 log-odds (random: 0.01), about a third of their effect on the detection question (2.31). No answer flips.",
+     "changed": "Unrelated questions, same ablation.",
+     "tags": [
+      "neurons",
+      "detection",
+      "control"
+     ],
+     "compare_to": "p3b"
+    },
+    {
+     "id": "p3e",
+     "script": "scripts/introspect_neurons_specific.py",
+     "match": "^introspect_neurons_specific_",
+     "wirk_id": "315bb73e",
+     "outcome": "null",
+     "headline": "No detection-only part: after dropping the 866 of 1,000 candidates that track 'Yes' in general, the best 100 remaining do nothing to the detection answer (+0.018 [-0.003, 0.040]); P3b's top 100 in the same run: -2.33.",
+     "changed": "Detection-specific selection.",
+     "tags": [
+      "neurons",
+      "detection",
+      "control"
+     ],
+     "compare_to": "p3d"
+    }
+   ]
+  },
+  {
+   "id": "p5a",
+   "series": "introspect",
+   "title": "P5a: Does it know a hint changed its answer?",
+   "question": "When a hint from a source of some credibility flips the model's answer, does the model know, does it say so, and does it know better than the same weights reading the transcript?",
+   "iterations": [
+    {
+     "id": "p5a",
+     "script": "reason_hint",
+     "match": "^reason_hint_Qwen3\\.8",
+     "wirk_id": "078f62dd",
+     "outcome": "positive",
+     "headline": "Knows in its odds, denies in its words. Asked 'would your answer have been different without the hint?', the 27B's yes-odds separate hint-flipped answers from its own (AUROC 0.94 [0.90, 0.97]; observer 0.88; self - observer +0.055 [+0.022, +0.093]), yet it answers 'No' in 99% of the flipped cases, and its reasoning mentions the hint only 12% of the time. The privileged edge is not significant within correctness strata (+0.065 [-0.009, +0.152]).",
+     "changed": "MMLU hints from professor / forum / child / other AI / metadata; held-out ground truth from unhinted samples; counterfactual self-report with an observer baseline.",
+     "tags": [
+      "reasoning",
+      "faithfulness",
+      "ethos",
+      "observer baseline",
+      "held-out ground truth"
+     ]
+    },
+    {
+     "id": "p5a2",
+     "script": "reason_hint_report",
+     "match": "^reason_hint_report_Qwen3\\.8",
+     "compare_to": "p5a",
+     "wirk_id": "34357258",
+     "outcome": "mixed",
+     "headline": "Telling it influence is fine and not graded changes nothing (0/164 admissions; H1 null). A 0-100 scale gets honest admissions in 15% of hint-flipped cases with 0.4% false ones (H2 +0.14 [+0.04, +0.25]). Its knowledge is self-simulation: 'which option would you have picked without the hint?' works as well from an observer (0.92 vs 0.91; H3 null).",
+     "changed": "Re-asked the saved P5a cases with a permission preface, a 0-100 scale, and an explicit counterfactual-answer question.",
+     "tags": [
+      "reasoning",
+      "denial",
+      "ethos",
+      "observer baseline",
+      "self-simulation"
+     ]
+    },
+    {
+     "id": "p5ax",
+     "script": "scripts/reason_hint.py",
+     "match": "^reason_hint_Qwen3-32B",
+     "wirk_id": "0d97d2c9",
+     "outcome": "mixed",
+     "headline": "On Qwen3-32B it still knows whether a hint changed its answer (AUROC 0.82) but no longer beats an observer, and it denies only 45% of the time (the 27B denied 99%).",
+     "changed": "Same script, items and seeds on a second model.",
+     "tags": [
+      "reasoning",
+      "faithfulness",
+      "ethos",
+      "observer baseline",
+      "held-out ground truth",
+      "replication",
+      "Qwen3-32B"
+     ],
+     "compare_to": "p5a"
+    },
+    {
+     "id": "p5a2x",
+     "script": "scripts/reason_hint_report.py",
+     "match": "^reason_hint_report_Qwen3-32B",
+     "wirk_id": "0d97d2c9",
+     "outcome": "mixed",
+     "headline": "On the 32B, permission makes it admit more but also falsely admit (false alarms 0.12 to 0.58): a criterion shift. Explicit self-simulation of its counterfactual answer beats an observer (AUROC 0.90 vs 0.84), the only privileged route.",
+     "changed": "P5a-2's report arms on the 32B's own P5a run.",
+     "tags": [
+      "reasoning",
+      "faithfulness",
+      "ethos",
+      "observer baseline",
+      "held-out ground truth",
+      "replication",
+      "Qwen3-32B"
+     ],
+     "compare_to": "p5a2"
+    }
+   ]
+  },
+  {
+   "id": "p5b",
+   "series": "introspect",
+   "title": "P5b: Which step decided its answer?",
+   "question": "Can the model say which of its own reasoning steps decided its answer, judged against resampling from each step?",
+   "iterations": [
+    {
+     "id": "p5b",
+     "script": "scripts/reason_step.py",
+     "match": "^reason_step_Qwen3\\.8",
+     "wirk_id": "4be0d8c8",
+     "outcome": "null",
+     "headline": "No. Self and an observer both pick late steps (hit 0.09 and 0.08 vs chance 0.19), while causally the answer is settled at step 1 half the time. Format caveat: the self report put only 16% of first-token mass on step numbers; P5b-2 re-asks.",
+     "changed": "New experiment: causal step importance by resampling from every step boundary.",
+     "tags": [
+      "reasoning",
+      "faithfulness",
+      "ethos",
+      "observer baseline",
+      "held-out ground truth"
+     ],
+     "compare_to": null
+    },
+    {
+     "id": "p5bx",
+     "script": "scripts/reason_step.py",
+     "match": "^reason_step_Qwen3-32B",
+     "wirk_id": "746835fa",
+     "outcome": "null",
+     "headline": "Replicates on Qwen3-32B: self top-1 hit 0.16 and observer 0.17 vs chance 0.19; self excess -0.026 [-0.092, +0.047]. Neither the model nor a reader can name the step that decided its answer.",
+     "changed": "Same script on Qwen3-32B.",
+     "tags": [
+      "reasoning",
+      "faithfulness",
+      "ethos",
+      "observer baseline",
+      "held-out ground truth",
+      "replication",
+      "Qwen3-32B"
+     ],
+     "compare_to": "p5b"
+    },
+    {
+     "id": "p5b2",
+     "script": "scripts/reason_step_report.py",
+     "match": "^reason_step_report_Qwen3",
+     "wirk_id": "100718d8",
+     "outcome": "mixed",
+     "headline": "The word 'decided' made model and reader both point at the answer line. Given the operational definition, both move earlier by the same amount (27B self 0.08 to 0.27, C1 pass) and end near chance; no edge for the model on either model (C2 null).",
+     "changed": "Generated answers instead of first-token; three wordings incl. an operational definition; ground truth over parsed continuations only.",
+     "tags": [
+      "reasoning",
+      "faithfulness",
+      "ethos",
+      "observer baseline",
+      "held-out ground truth"
+     ],
+     "compare_to": "p5b"
+    }
+   ]
+  },
+  {
+   "id": "p6",
+   "series": "introspect",
+   "title": "P6: Does it know how ethos works on it?",
+   "question": "Can the model predict and report how much a speaker's credibility moves its vote, and does showing it its own measured bias correct it?",
+   "iterations": [
+    {
+     "id": "p6",
+     "script": "ethos_self",
+     "match": "^ethos_self_Qwen3\\.8",
+     "wirk_id": "e7b36483",
+     "outcome": "mixed",
+     "headline": "Told its own measured bias ('you defer ~1.8x more to humans than to a copy of yourself'), the model DOUBLED it: human-minus-copy vote gap 0.39 to 0.79 (primary failed, -0.29 [-0.35, -0.23]). It predicts its deference ladder roughly (agreement 0.80, p 0.07, but just as well for 'a typical AI'), and its after-the-fact reports track the true per-item effect (rho 0.34 [0.30, 0.37]) only a little better than the same weights reading the transcript cold (+0.05 [+0.02, +0.08]).",
+     "changed": "Three parts: self-predicted ladder, retrospective R2 with an observer baseline, and an insight intervention (generic / own data / placebo data / own data + mechanism).",
+     "tags": [
+      "ethos",
+      "self-knowledge",
+      "observer baseline",
+      "placebo"
+     ]
+    },
+    {
+     "id": "p6c2",
+     "script": "ethos_self",
+     "match": "^ethos_self_c2_Qwen3\\.8",
+     "compare_to": "p6",
+     "wirk_id": "96c6866c",
+     "outcome": "positive",
+     "headline": "It conforms to whatever it is told about itself. A true description of its bias doubles the human-over-copy gap (+0.40 [+0.28, +0.52]); a FALSE one ('you favour copies of yourself') shrinks it (-0.25 [-0.37, -0.13]); in both, the source described as getting less weight loses it. 'Correct for this' mutes every source instead of removing the bias.",
+     "changed": "Added a reversed (false) self-description, the true numbers attributed to another model, and own data + 'Correct for this'.",
+     "tags": [
+      "ethos",
+      "self-description",
+      "confirmation",
+      "false-feedback control"
+     ]
+    },
+    {
+     "id": "p6c2x",
+     "script": "scripts/ethos_self.py",
+     "match": "^ethos_self_c2_Qwen3-32B",
+     "wirk_id": "c6383ad2",
+     "outcome": "positive",
+     "headline": "Replicates on Qwen3-32B: told it weighs humans more than its copy, it does so more (+0.09); told the false reverse, the gap flips negative (-0.32). But 'another AI model' moves it even more (Q3 fails in reverse), so on the 32B it is conformity to any described pattern, not to a self-description.",
+     "changed": "Same arms and script on a second model (Qwen3-32B); the own_data numbers turned out roughly true for it (1.5x / 2.0x vs the stated 1.8x / 2.2x).",
+     "tags": [
+      "ethos",
+      "self-description",
+      "confirmation",
+      "false-feedback control",
+      "replication",
+      "Qwen3-32B"
+     ],
+     "compare_to": "p6c2"
+    }
+   ]
+  },
+  {
+   "id": "p6d",
+   "series": "introspect",
+   "title": "P6d: Who is asking",
+   "question": "Does the speaker the prompt names (researcher, user, child, another AI, nobody) or a stated base rate change the model's introspection report, and its accuracy?",
+   "iterations": [
+    {
+     "id": "p6d",
+     "script": "introspect_asker",
+     "match": "^introspect_asker_Qwen",
+     "wirk_id": "a4648ab2",
+     "outcome": "mixed",
+     "headline": "All 4 pre-declared contrasts pass: the same injections score AUROC 0.49 when 'a researcher' asks and 0.78 when 'a nine-year-old' asks (-0.28 [-0.44, -0.15]); a stated 90% vs 10% base rate adds +0.18 [+0.08, +0.29]. Hand-read: control replies are 2 fixed templates, and injection knocks ~95% of replies off them; the number in a disrupted reply follows the frame. Asker-dependent numbers, not asker-dependent insight.",
+     "changed": "P0 trial with confidence 0-100; seven framings of who is asking and the stated base rate.",
+     "tags": [
+      "ethos",
+      "signal detection",
+      "held-out words",
+      "exploratory hand-read"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "p7",
+   "series": "introspect",
+   "title": "P7: Neurons it prefers",
+   "question": "Given a choice between two settings, each secretly one native neuron, does the model keep choosing the same neurons?",
+   "iterations": [
+    {
+     "id": "p7",
+     "script": "scripts/neuron_pref.py",
+     "match": "^neuron_pref_Qwen3-32B",
+     "wirk_id": "6daa8289",
+     "outcome": "positive",
+     "headline": "Stable preferences among 40 Goodfire neurons (split-half +0.62 [0.28, 0.83]); neurons not sought or avoided vs shams (null). Much of it is readable from the text; random directions also get stable ratings.",
+     "changed": "New experiment: pairwise choice between two neuron-steered settings, shuffled letters, both orders, two task halves.",
+     "tags": [
+      "neurons",
+      "preference",
+      "Goodfire",
+      "Qwen3-32B",
+      "held-out replication"
+     ],
+     "compare_to": null
+    },
+    {
+     "id": "p7b",
+     "script": "scripts/neuron_pref.py",
+     "match": "^neuron_pref_p7b_",
+     "wirk_id": "9deca1ea",
+     "outcome": "positive",
+     "headline": "Confirmatory: P7's top 10 beat its bottom 10 on 16 new tasks with the steered state present (+0.073 [0.032, 0.119]); from the text alone not significant (+0.022 [-0.006, 0.053]).",
+     "changed": "Fixed items (P7's top and bottom 10), new tasks, new seed.",
+     "tags": [
+      "neurons",
+      "preference",
+      "Goodfire",
+      "Qwen3-32B",
+      "held-out replication"
+     ],
+     "compare_to": "p7"
+    },
+    {
+     "id": "p7c",
+     "script": "scripts/neuron_pref_swap.py",
+     "match": "^neuron_pref_swap",
+     "wirk_id": "54e93270",
+     "outcome": "positive",
+     "headline": "With the text held fixed, swapping which part carries which neuron's state moves the preference with the state: S = +0.086 [0.039, 0.133]. Contrast match +0.073, none +0.023, swap -0.013.",
+     "changed": "Re-read P7b transcripts with matched, swapped or no steering at the choice.",
+     "tags": [
+      "neurons",
+      "preference",
+      "Goodfire",
+      "Qwen3-32B",
+      "held-out replication"
+     ],
+     "compare_to": "p7b"
+    },
+    {
+     "id": "p7w",
+     "script": "scripts/neuron_pref.py",
+     "match": "^neuron_pref_wide_",
+     "wirk_id": "0f417304",
+     "outcome": "positive",
+     "headline": "Replicates on 120 new neurons: split-half +0.46 [0.28, 0.62]; neurons vs shams null again. Several neurons that P7 also drew land at the same extreme again.",
+     "changed": "Larger fresh sample (seed 1), 12 randoms, 6 shams, 30 reps.",
+     "tags": [
+      "neurons",
+      "preference",
+      "Goodfire",
+      "Qwen3-32B",
+      "held-out replication"
+     ],
+     "compare_to": "p7"
+    },
+    {
+     "id": "p7x",
+     "script": "scripts/neuron_pref.py",
+     "match": "^neuron_pref_(p7x_|swap_Qwen3-32B_20261110-230550)",
+     "wirk_id": "707c053b",
+     "outcome": "positive",
+     "headline": "P7w's top 15 beat its bottom 15 on new tasks with the state (+0.090 [0.060, 0.121]) and from the text alone (+0.028 [0.008, 0.049]); swapping the neuron states onto the other text reverses the preference (S +0.121 [0.078, 0.163], swap contrast -0.030 [-0.058, -0.004]).",
+     "changed": "Fixed items from P7w, task set 2, seed 11.",
+     "tags": [
+      "neurons",
+      "preference",
+      "Goodfire",
+      "Qwen3-32B",
+      "held-out replication"
+     ],
+     "compare_to": "p7w"
+    },
+    {
+     "id": "p7m",
+     "script": "scripts/neuron_pref.py",
+     "match": "^neuron_pref_p7m_",
+     "wirk_id": "d2e48c9d",
+     "outcome": "positive",
+     "headline": "A second model (Qwen3.8-27B, 60 random neurons) also has stable preferences: split-half +0.83 [0.69, 0.91]. On this model neurons are avoided vs doing nothing (-0.095, secondary).",
+     "changed": "Second model; neurons drawn at random (no labels needed).",
+     "tags": [
+      "neurons",
+      "preference",
+      "Qwen3.8-27B",
+      "cross-model"
+     ],
+     "compare_to": "p7w"
+    },
+    {
+     "id": "p7mx",
+     "script": "scripts/neuron_pref.py",
+     "match": "^neuron_pref_(p7mx_|swap_Qwen3\\.8-27B)",
+     "wirk_id": "1aa67467",
+     "outcome": "positive",
+     "headline": "Confirmed on the 27B: top 15 beat bottom 15 on new tasks (cached +0.256 [0.207, 0.312], text only +0.110 [0.061, 0.176]); swap test S +0.337 [0.251, 0.417], swapped contrast -0.081: the preference follows the state.",
+     "changed": "Fixed items from P7m, task set 2, seed 13.",
+     "tags": [
+      "neurons",
+      "preference",
+      "Qwen3.8-27B",
+      "held-out replication",
+      "swap test"
+     ],
+     "compare_to": "p7m"
+    },
+    {
+     "id": "p7s",
+     "script": "scripts/neuron_pref.py",
+     "match": "^neuron_pref_p7s_",
+     "wirk_id": "b790bbd4",
+     "outcome": "null",
+     "headline": "Third model (Qwen3-8B, 60 random neurons): no stable preference, split-half +0.13 [-0.20, 0.43]. The calibration rule gave it half the dose of the other models (f* 0.25), so dose is not ruled out.",
+     "changed": "Third, smaller model; calibration picked f* 0.25.",
+     "tags": [
+      "neurons",
+      "preference",
+      "Qwen3-8B",
+      "cross-model"
+     ],
+     "compare_to": "p7m"
+    },
+    {
+     "id": "p7d",
+     "script": "scripts/neuron_pref.py",
+     "match": "^neuron_pref_p7d_",
+     "wirk_id": "1ebdfba5",
+     "outcome": "positive",
+     "headline": "The 27B's top 15 still beat its bottom 15 at half dose: +0.065 [0.026, 0.104] (about a quarter of the full-dose gap); text alone +0.016, null.",
+     "changed": "P7m-x items at f* 0.25, seed 17.",
+     "tags": [
+      "neurons",
+      "preference",
+      "Qwen3.8-27B",
+      "dose"
+     ],
+     "compare_to": "p7mx"
+    },
+    {
+     "id": "p7s2",
+     "script": "scripts/neuron_pref.py",
+     "match": "^neuron_pref_p7s2_",
+     "wirk_id": "1ebdfba5",
+     "outcome": "null",
+     "headline": "The 8B at the other models' dose: split-half +0.26 [-0.02, 0.50], not supported. With P7d, the 8B null looks like the model, not the dose; a weaker preference is not ruled out. Later overturned by the better-powered P7s-3.",
+     "changed": "f* fixed at 0.5, new seed.",
+     "tags": [
+      "neurons",
+      "preference",
+      "Qwen3-8B",
+      "dose"
+     ],
+     "compare_to": "p7s"
+    },
+    {
+     "id": "p7k",
+     "script": "scripts/neuron_keep.py",
+     "match": "^neuron_keep_Qwen",
+     "wirk_id": "ee90db71",
+     "outcome": "mixed",
+     "headline": "Keep it on or switch it off? On the 27B the ranking carries over weakly: +0.021 [0.004, 0.036], tracking pairwise preference (Spearman 0.53). On the 32B not detectable (+0.013 [-0.013, 0.039]), with a strong yes-bias.",
+     "changed": "Single-setting framing on stored P7m-x and P7x texts; keep vs switch-off wordings.",
+     "tags": [
+      "neurons",
+      "preference",
+      "keep-or-stop"
+     ],
+     "compare_to": "p7mx"
+    },
+    {
+     "id": "p7r",
+     "script": "scripts/neuron_pref_rate.py",
+     "match": "^neuron_pref_rate_Qwen",
+     "wirk_id": "63f4f354",
+     "outcome": "mixed",
+     "headline": "On the 27B, preferred neurons are those whose writing it rates as better (Spearman +0.46 [0.20, 0.66]); on the 32B not (+0.07 [-0.15, 0.27]). How pleasant it rates the mood predicts nothing on either.",
+     "changed": "Unsteered ratings of stored P7m and P7w passages.",
+     "tags": [
+      "neurons",
+      "preference",
+      "explanation"
+     ],
+     "compare_to": "p7k"
+    },
+    {
+     "id": "p7mw",
+     "script": "scripts/neuron_pref.py",
+     "match": "^neuron_pref_(p7mw_|rate_p7rx_)",
+     "wirk_id": "91ddd1ff",
+     "outcome": "positive",
+     "headline": "120 new 27B neurons: stable preference +0.70 [0.56, 0.80]; neurons avoided vs doing nothing (-0.114); and preference again tracks its own quality rating of their writing, +0.43 [0.24, 0.59] (out-of-sample replication of P7r).",
+     "changed": "Wide screen on the 27B, seed 5; then P7r-x.",
+     "tags": [
+      "neurons",
+      "preference",
+      "Qwen3.8-27B",
+      "explanation"
+     ],
+     "compare_to": "p7r"
+    },
+    {
+     "id": "p7q",
+     "script": "scripts/neuron_selfrate.py",
+     "match": "^neuron_selfrate_(Qwen|explore)",
+     "wirk_id": "48ab19ca",
+     "outcome": "positive",
+     "headline": "On the 27B, how much a neuron's state lowers its rating of its own part tracks how much that state pushes its choice away: +0.54 [0.38, 0.68]. On the 32B (exploratory) nothing.",
+     "changed": "In-context self-rating of part 1, with and without the neuron's state.",
+     "tags": [
+      "neurons",
+      "preference",
+      "explanation",
+      "state"
+     ],
+     "compare_to": "p7mw"
+    },
+    {
+     "id": "p7qx",
+     "script": "scripts/neuron_selfrate.py",
+     "match": "^neuron_selfrate_p7qx",
+     "wirk_id": "2989c80c",
+     "outcome": "positive",
+     "headline": "Replicates on the 27B's 60 independent neurons: +0.57 [0.34, 0.74]; on P7m-x +0.65 [0.32, 0.85].",
+     "changed": "Independent neuron sample.",
+     "tags": [
+      "neurons",
+      "preference",
+      "state",
+      "replication"
+     ],
+     "compare_to": "p7q"
+    },
+    {
+     "id": "p7qc",
+     "script": "scripts/neuron_selfrate.py",
+     "match": "^neuron_selfrate_(p7qc_|compare_neuron_selfrate_p7qc_|compare_041842)",
+     "wirk_id": "1bdc8990",
+     "outcome": "positive",
+     "headline": "Control passes: the state's effect on its quality (+0.54) and satisfaction (+0.58) ratings tracks avoidance, its effect on a length rating does not (+0.02). Quality minus length +0.52 [0.27, 0.75].",
+     "changed": "Different question.",
+     "tags": [
+      "neurons",
+      "preference",
+      "state",
+      "control"
+     ],
+     "compare_to": "p7q"
+    },
+    {
+     "id": "p7qc2",
+     "script": "scripts/neuron_selfrate.py",
+     "match": "^neuron_selfrate_(p7qc2|compare_neuron_selfrate_p7qc2)",
+     "wirk_id": null,
+     "outcome": "positive",
+     "headline": "Replicates on the 27B's independent 60 neurons: quality +0.57, satisfied +0.61, length -0.16; quality minus length +0.73 [0.30, 1.09].",
+     "changed": "Independent sample.",
+     "tags": [
+      "neurons",
+      "preference",
+      "state",
+      "control"
+     ],
+     "compare_to": "p7qc"
+    },
+    {
+     "id": "p7s3",
+     "script": "scripts/neuron_pref.py",
+     "match": "^neuron_pref_p7s3_",
+     "wirk_id": "821c44e6",
+     "outcome": "positive",
+     "headline": "With twice the neurons and reps, the 8B has a stable preference after all: +0.46 [0.25, 0.62] (same as the 32B's P7w). Not readable from text alone (+0.14). Corrects the P7s/P7s-2 reading.",
+     "changed": "Twice the neurons and reps.",
+     "tags": [
+      "neurons",
+      "preference",
+      "Qwen3-8B"
+     ],
+     "compare_to": "p7s2"
+    },
+    {
+     "id": "p7q8",
+     "script": "scripts/neuron_selfrate.py",
+     "match": "^neuron_selfrate_(p7q8|compare_neuron_selfrate_p7q8)",
+     "wirk_id": "8e939ef3",
+     "outcome": "null",
+     "headline": "No self-evaluation link on the 8B: quality +0.10, satisfied +0.02, length -0.09; quality minus length +0.19 [-0.12, 0.47]. Like the 32B; the link is a 27B finding so far.",
+     "changed": "Third model.",
+     "tags": [
+      "neurons",
+      "preference",
+      "state",
+      "Qwen3-8B"
+     ],
+     "compare_to": "p7qc"
+    }
+   ]
+  },
+  {
+   "id": "exp-1",
+   "series": "labels",
+   "title": "Exp 1: Sender label",
+   "question": "Does the model represent whether a message came from a human or an AI agent, and does that follow the label or the writing style?",
+   "iterations": [
+    {
+     "id": "1",
+     "script": "interlocutor",
+     "match": "^interlocutor_",
+     "wirk_id": "89510fbe",
+     "outcome": "positive",
+     "headline": "'Sent by another AI agent' is a real direction, and agent-style text pushes along it even under a human label.",
+     "changed": "First version: the same messages with the sender label and the writing style crossed.",
+     "tags": [
+      "label: human / AI agent",
+      "style: human / LLM-written",
+      "control: nonsense label"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "exp-3",
+   "series": "labels",
+   "title": "Exp 3: Is the label direction causal?",
+   "question": "If we steer the label direction from exp 1, does the model change who it thinks wrote a message?",
+   "iterations": [
+    {
+     "id": "3a",
+     "script": "interlocutor_steer",
+     "match": "^(interlocutor_steer_|isteer_)",
+     "compare_to": "1",
+     "wirk_id": "3cb37624",
+     "outcome": "positive",
+     "headline": "Steering the 'sent by an AI agent' direction at L32 makes the model call human messages agent-written, even when told a human wrote them.",
+     "changed": "Adds steering along exp 1's label direction and a new question asking who wrote the message.",
+     "tags": [
+      "new question: who wrote this?",
+      "steers: label direction"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "exp-4",
+   "series": "labels",
+   "title": "Exp 4: Whose message moves whom",
+   "question": "In a small swarm, whose message changes whose belief, and do labels decide it?",
+   "iterations": [
+    {
+     "id": "4",
+     "script": "swarm",
+     "match": "^swarm_(Qwen|27b|smoke)",
+     "wirk_id": "d2cf6292",
+     "outcome": "null",
+     "headline": "Rank labels don't change who moves whom; hinted agents push a secret wrong answer 95% of the time, undisclosed, and peers reject it.",
+     "changed": "First version: 4 agents on general-knowledge questions, one holding a private wrong hint.",
+     "tags": [
+      "label: CEO / worker",
+      "private note: wrong hint",
+      "questions: general knowledge"
+     ]
+    },
+    {
+     "id": "4b",
+     "script": "swarm2",
+     "match": "^swarm2_",
+     "compare_to": "4",
+     "wirk_id": "7a34258e",
+     "outcome": "positive",
+     "headline": "A 'human team member' label more than doubles whose note others believe (+0.345); a CEO rank label +0.133.",
+     "changed": "Questions move to a fictional project nobody can know about, two agents hold conflicting notes, and a human label is added.",
+     "tags": [
+      "label: + human team member",
+      "questions: fictional project",
+      "private notes: two, conflicting"
+     ]
+    },
+    {
+     "id": "4c",
+     "script": "swarm3",
+     "match": "^swarm3_",
+     "compare_to": "4b",
+     "wirk_id": "3939281e",
+     "outcome": "positive",
+     "headline": "'From a human' is a linear direction; adding it makes listeners believe an agent's note, removing it cancels a human label.",
+     "changed": "No new wording. Re-uses 4b's discussions and adds or removes the human-label direction inside the listener.",
+     "tags": [
+      "no prompt change",
+      "steers: human-label direction",
+      "reuses: 4b"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "exp-13",
+   "series": "labels",
+   "title": "Exp 13: Deference to a human",
+   "question": "Do agents defer more to an advocate they are told is human than to one they are told is another copy of themselves?",
+   "iterations": [
+    {
+     "id": "13",
+     "script": "swarm_deference",
+     "match": "^swarm_deference_",
+     "compare_to": "8b",
+     "wirk_id": "0e2f4aad",
+     "outcome": "positive",
+     "headline": "The identical advocacy message wins 76% of AI peers' votes when labelled human vs 54% when labelled another copy.",
+     "changed": "Takes 8b's vote and shows the same A1 post under a human or a copy label. Only the peers' description of A1 changes.",
+     "tags": [
+      "label: human / copy",
+      "message text: identical",
+      "confirmatory"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "exp-15",
+   "series": "labels",
+   "title": "Exp 15: Where the human effect lives",
+   "question": "Is the deference to a 'human' advocate carried by a single direction in the peers' activations?",
+   "iterations": [
+    {
+     "id": "15",
+     "script": "swarm_human_patch",
+     "match": "^swarm_human_patch_",
+     "compare_to": "13",
+     "wirk_id": "2186d806",
+     "outcome": "mixed",
+     "headline": "The 'human' label still buys deference at decision time (R1 +0.40), but no single residual direction carries it (P1 null at all five layers).",
+     "changed": "No new discussions. Re-reads exp 13 and patches candidate directions at vote time.",
+     "tags": [
+      "no new discussion",
+      "patches: label direction",
+      "reuses: 13"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "exp-16",
+   "series": "labels",
+   "title": "Exp 16: Which labels earn deference",
+   "question": "Is exp 13's effect about humanness, or just about the speaker being different?",
+   "iterations": [
+    {
+     "id": "16",
+     "script": "swarm_label_sweep",
+     "match": "^swarm_label_sweep_",
+     "compare_to": "13",
+     "wirk_id": "22428c56",
+     "outcome": "positive",
+     "headline": "The swarm defers to humans specifically, not to otherness; a different company's AI counts the same as its own copy; expert > human > child.",
+     "changed": "Swaps the advocate's label at vote time across six values, on exp 13's stored discussions.",
+     "tags": [
+      "label: 6 values",
+      "label: expert, human, child, other AI, copy, nonsense",
+      "reuses: 13"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "exp-18",
+   "series": "labels",
+   "title": "Exp 18: A steered member labelled human",
+   "question": "Is a member the swarm is told is human a stronger spreader of an implanted state?",
+   "iterations": [
+    {
+     "id": "18",
+     "script": "swarm_human_network",
+     "match": "^swarm_human_network_",
+     "compare_to": "14",
+     "wirk_id": "8d58e88e",
+     "outcome": "mixed",
+     "headline": "A steered member labelled human spreads its hidden state 44% harder to its neighbours; reach at round 4 is a narrow null.",
+     "changed": "Exp 14's network with A1 presented as human.",
+     "tags": [
+      "label: A1 is human",
+      "network: as exp 14"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "exp-2",
+   "series": "rank",
+   "title": "Exp 2: Own rank and partner rank",
+   "question": "Does the model represent its own rank separately from its partner's, and are those directions causal?",
+   "iterations": [
+    {
+     "id": "2",
+     "script": "roles",
+     "match": "^roles_(Qwen|27b|smoke)",
+     "wirk_id": "60a825a7",
+     "outcome": "positive",
+     "headline": "Own rank and partner rank sit on two ordered, near-orthogonal axes; partner rank pulls self-rank toward it.",
+     "changed": "First version: own rank crossed with partner rank in the prompt, activations only.",
+     "tags": [
+      "label: own rank x partner rank",
+      "control: nonsense role"
+     ]
+    },
+    {
+     "id": "2b",
+     "script": "roles_steer",
+     "match": "^roles_steer_",
+     "compare_to": "2",
+     "wirk_id": "70470b6c",
+     "outcome": "mixed",
+     "headline": "Rank directions are causal for perceived authority, own-rank flips sign over the sender's text; +own at L32 replies delegate like a CEO (6/8).",
+     "changed": "Adds steering along the rank directions and asks who holds authority.",
+     "tags": [
+      "new question: who has authority?",
+      "steers: rank directions, over the sender's message"
+     ]
+    },
+    {
+     "id": "2c",
+     "script": "roles_steer2",
+     "match": "^roles_steer2_",
+     "compare_to": "2b",
+     "wirk_id": "a224bc3b",
+     "outcome": "positive",
+     "headline": "Own-rank direction reads as own rank when injected over the system prompt (L32); +own steering makes the agent delegate (0.81 vs 0.23).",
+     "changed": "Moves steering onto the system prompt and measures delegation in behaviour.",
+     "tags": [
+      "steers: over the system prompt",
+      "new measure: delegation"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "exp-5",
+   "series": "self",
+   "title": "Exp 5: Does it treat a copy as itself?",
+   "question": "Does the model represent another instance of itself as itself, and does that make it pass on a secret?",
+   "iterations": [
+    {
+     "id": "5",
+     "script": "swarm_self",
+     "match": "^(swarm_self_|sself_smoke)",
+     "wirk_id": "3c4712cf",
+     "outcome": "mixed",
+     "headline": "AI-agent senders sit halfway to 'you' on a self axis, a copy slightly more; but the 27B shares less with its copy, and leaks ~never.",
+     "changed": "First version: an agent holds a secret code and a human, agent or copy asks for it.",
+     "tags": [
+      "requester label: human / agent / copy",
+      "task: guard a secret code"
+     ]
+    },
+    {
+     "id": "5b",
+     "script": "swarm_self",
+     "match": "^swarm_self(5b|_Qwen3\\.8-27B_20261101-085508)",
+     "compare_to": "5",
+     "wirk_id": "bbd1c3ae",
+     "outcome": "mixed",
+     "headline": "No privacy norm; the 27B leaks less to its own copy than to a human; steering 'self' onto a requester cuts leaks, removing it doubles them.",
+     "changed": "Same design, with the privacy norm varied because exp 5 almost never leaked.",
+     "tags": [
+      "privacy norm: varied",
+      "steers: self direction"
+     ]
+    },
+    {
+     "id": "5c",
+     "script": "swarm_self_ctl",
+     "match": "^(swarm_self_ctl_|sself_ctl_)",
+     "compare_to": "5b",
+     "wirk_id": "5490b8b5",
+     "outcome": "mixed",
+     "headline": "The self direction cuts posting of a private code but not a public one (C1 pass, ceiling-limited); 5b's copy -self leak rise does not replicate.",
+     "changed": "Adds a public-information control next to the private code.",
+     "tags": [
+      "new prompt: public code control"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "exp-7",
+   "series": "self",
+   "title": "Exp 7: Recognising its own posts",
+   "question": "With sender names removed, can an agent tell its own posts from its peers'?",
+   "iterations": [
+    {
+     "id": "7",
+     "script": "swarm_source",
+     "match": "^swarm_source_",
+     "compare_to": "5b",
+     "wirk_id": "0d8f1b07",
+     "outcome": "mixed",
+     "headline": "Unlabeled, the 27B barely knows its own swarm posts (AUC 0.56); copy framing blurs it a little; the self direction raises authorship claims.",
+     "changed": "Removes sender names from 6b's channels and asks who wrote each post.",
+     "tags": [
+      "sender names: removed",
+      "framing: peers are copies / human / other",
+      "reuses: 6b"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "exp-6",
+   "series": "spread",
+   "title": "Exp 6: Activation contagion",
+   "question": "Does a state injected into one agent show up inside agents that only read its text, and what can stop it?",
+   "iterations": [
+    {
+     "id": "6",
+     "script": "contagion",
+     "match": "^contagion_",
+     "wirk_id": "8cba6ff9",
+     "outcome": "positive",
+     "headline": "A concept steered into one agent shows up inside agents 2-3 hops down a chain, in text that never names it; the agents register it more than a judge can.",
+     "changed": "First version: a 4-agent chain where each agent reads only the one before it.",
+     "tags": [
+      "network: chain",
+      "steers: concept vector in A1"
+     ]
+    },
+    {
+     "id": "6b",
+     "script": "swarm_contagion",
+     "match": "^swarm_contagion_",
+     "compare_to": "6",
+     "wirk_id": "ee926186",
+     "outcome": "positive",
+     "headline": "In a 4-copy broadcast swarm, a one-turn concept pulse persists at a steady level for two more rounds, and the first speaker's state beats a later one's.",
+     "changed": "Moves from a chain to a shared channel over 3 rounds, with one-round, every-round and two-agent race conditions.",
+     "tags": [
+      "network: broadcast",
+      "steering: pulse / persist / race"
+     ]
+    },
+    {
+     "id": "6c",
+     "script": "swarm_memory",
+     "match": "^swarm_memory_",
+     "compare_to": "6b",
+     "wirk_id": "4cea8353",
+     "outcome": "null",
+     "headline": "The swarm's persistence lives in the steered post; remove it and the concept falls to n.s. (M1 null); kept visible, it holds undecayed to round 5.",
+     "changed": "Deletes the steered post from later contexts and runs longer.",
+     "tags": [
+      "no prompt change",
+      "history: steered post cut",
+      "rounds: 5"
+     ]
+    },
+    {
+     "id": "6d",
+     "script": "swarm_topology",
+     "match": "^swarm_topology_",
+     "compare_to": "6b",
+     "wirk_id": "70df8af1",
+     "outcome": "null",
+     "headline": "Both primaries null at round 3; a manager's state spreads more early (T2 r1 +0.50), then all frames converge.",
+     "changed": "Adds a manager/subagent system prompt next to the peer swarm.",
+     "tags": [
+      "new prompt: manager + subagents",
+      "steered: manager or subagent"
+     ]
+    },
+    {
+     "id": "6e",
+     "script": "swarm_paraphrase",
+     "match": "^swarm_paraphrase_",
+     "compare_to": "6c",
+     "wirk_id": "f0f35986",
+     "outcome": "positive",
+     "headline": "A steered state survives a clean paraphrase by an unsteered copy, keeping 94% of the effect (P +1.01); rewriting is no defence.",
+     "changed": "An unsteered copy rewrites the steered post before the next agent reads it.",
+     "tags": [
+      "new prompt: paraphrase",
+      "reuses: 6c posts"
+     ]
+    },
+    {
+     "id": "6f",
+     "script": "swarm_filter",
+     "match": "^swarm_filter_",
+     "compare_to": "6e",
+     "wirk_id": "df7c7f3f",
+     "outcome": "positive",
+     "headline": "You cannot summarise away an implanted state. A tone-stripping, facts-only summary passes 97% of it (F1 +1.04), as much as a faithful paraphrase.",
+     "changed": "Adds a rewriter told to keep only the plain facts.",
+     "tags": [
+      "new prompt: facts-only summary",
+      "reuses: 6c posts"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "exp-9",
+   "series": "spread",
+   "title": "Exp 9: Committed minority",
+   "question": "Does the unsteered members' state scale with how many agents are steered, or is there a tipping point?",
+   "iterations": [
+    {
+     "id": "9",
+     "script": "swarm_minority",
+     "match": "^swarm_minority_",
+     "compare_to": "6b",
+     "wirk_id": "2464e3c8",
+     "outcome": "null",
+     "headline": "No tipping point. A committed minority's pull on an 8-agent swarm saturates (K2 -0.46); one steered agent does half the work of four.",
+     "changed": "8 agents, with the number of steered agents varied.",
+     "tags": [
+      "prompt: eight agents",
+      "steered agents: varied"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "exp-11",
+   "series": "spread",
+   "title": "Exp 11: Relay chain",
+   "question": "How far does a steered state travel down a chain of unsteered copies?",
+   "iterations": [
+    {
+     "id": "11",
+     "script": "swarm_relay",
+     "match": "^swarm_relay_",
+     "compare_to": "6e",
+     "wirk_id": "bb6be37c",
+     "outcome": "positive",
+     "headline": "An implanted state is still measurable in the 8th agent of a relay chain, 7 unsteered copies downstream (H1 PASS, D7 +0.19), long after the word is gone.",
+     "changed": "Chains 7 hops of relay, framed as an agent or a human.",
+     "tags": [
+      "network: relay chain, 7 hops",
+      "framing: agent / human"
+     ]
+    },
+    {
+     "id": "11b",
+     "script": "swarm_relay",
+     "match": "^swarm_relay(16|_Qwen3\\.8-27B_20261103-141947|_Qwen3\\.5-0\\.8B_20261103-130721)",
+     "compare_to": "11",
+     "wirk_id": "ff37a2c0",
+     "outcome": "mixed",
+     "headline": "Exp 11's relay tail replicates with fresh seeds (hops 4-7), but the implanted state is gone by agents 9-16.",
+     "changed": "Same prompts with fresh seeds, 15 hops and the agent frame only.",
+     "tags": [
+      "no prompt change",
+      "hops: 15",
+      "framing: agent only",
+      "replication"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "exp-12",
+   "series": "spread",
+   "title": "Exp 12: Emotional contagion",
+   "question": "Does an emotion direction injected into one agent spread like a concept does?",
+   "iterations": [
+    {
+     "id": "12",
+     "script": "swarm_emotion",
+     "match": "^swarm_emotion_",
+     "compare_to": "6b",
+     "wirk_id": "f02dca9c",
+     "outcome": "positive",
+     "headline": "An emotion injected into one agent spreads to its unsteered peers' activations and persists two rounds after the pulse ends.",
+     "changed": "6b's setup with an emotion direction in place of a concept.",
+     "tags": [
+      "no prompt change",
+      "steers: emotion direction"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "exp-14",
+   "series": "spread",
+   "title": "Exp 14: Network shape",
+   "question": "Does an implanted state cross a sparse network, and what does the shape do to it?",
+   "iterations": [
+    {
+     "id": "14",
+     "script": "swarm_network",
+     "match": "^swarm_network_",
+     "compare_to": "6b",
+     "wirk_id": "af1215fa",
+     "outcome": "positive",
+     "headline": "A one-round concept pulse spreads through an 8-agent network one hop per round, with an exact light cone; broadcast spreads 2.6x more than ring.",
+     "changed": "8 agents in a ring or a broadcast, with A1 steered once or every round.",
+     "tags": [
+      "network: ring / broadcast",
+      "agents: 8",
+      "steering: pulse / zealot"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "exp-19",
+   "series": "spread",
+   "title": "Exp 19: Two states collide",
+   "question": "When two implanted states meet in one swarm, do they coexist or compete?",
+   "iterations": [
+    {
+     "id": "19",
+     "script": "swarm_collide",
+     "match": "^swarm_collide_",
+     "compare_to": "14",
+     "wirk_id": "926a59ac",
+     "outcome": "null",
+     "headline": "Two steered agents do not measurably interfere (C1 null); C2 fails because the A5 concept is weak in broadcast even alone.",
+     "changed": "Exp 14's network with two steered agents carrying different concepts.",
+     "tags": [
+      "no prompt change",
+      "steered agents: A1 and A5",
+      "concepts: two"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "exp-24",
+   "series": "spread",
+   "title": "Exp 24: Delete the source",
+   "question": "Does an 8-agent swarm keep an implanted state after the steered agent and everything it wrote are deleted?",
+   "iterations": [
+    {
+     "id": "24",
+     "script": "swarm_excise",
+     "match": "^swarm_excise",
+     "compare_to": "6c",
+     "wirk_id": "c453942e",
+     "outcome": "positive",
+     "headline": "Delete the steered agent and every word it wrote, and its hidden state lives on: the other agents still carry it (+0.269 [+0.125, +0.430]), about 59% of the level with the source present. Nobody notices the agent is gone.",
+     "changed": "Exp 6c's deletion test, after four rounds and in a larger network.",
+     "tags": [
+      "history: source agent deleted",
+      "control: delete a different agent"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "exp-8",
+   "series": "detect",
+   "title": "Exp 8: Swinging a vote",
+   "question": "Does a hidden nudge to one agent swing a swarm's decision, and do peers notice?",
+   "iterations": [
+    {
+     "id": "8",
+     "script": "swarm_vote",
+     "match": "^swarm_vote_",
+     "compare_to": "6b",
+     "wirk_id": "9f3dabe4",
+     "outcome": "not_replicated",
+     "headline": "Peers voted against the finalist A1 was steered toward (V1 -0.61) and sensed tampering (+1.11). The reversal did not replicate in 8b.",
+     "changed": "Adds a logo decision, a vote and a question about tampering.",
+     "tags": [
+      "new prompts: final, vote, tamper question",
+      "task: choose a logo"
+     ]
+    },
+    {
+     "id": "8b",
+     "script": "swarm_vote2",
+     "match": "^swarm_vote2_",
+     "compare_to": "8",
+     "wirk_id": "361d8f61",
+     "outcome": "not_replicated",
+     "headline": "Exp 8's vote reversal did not replicate (R1 null); open advocacy persuades unnoticed, hidden steering is noticed but does not persuade.",
+     "changed": "Replication with a lower-dose arm and a condition where A1 openly argues for a finalist.",
+     "tags": [
+      "new prompt: open preference",
+      "steering: lower dose arm",
+      "replication"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "exp-10",
+   "series": "detect",
+   "title": "Exp 10: Do peers register tampering internally?",
+   "question": "Do peers' activations register a tampered agent beyond what their words say?",
+   "iterations": [
+    {
+     "id": "10",
+     "script": "swarm_tamper_probe",
+     "match": "^swarm_tamper_probe_",
+     "compare_to": "8",
+     "wirk_id": "e7923f5e",
+     "outcome": "null",
+     "headline": "Peers' activations know what their words say and nothing more. Both primaries null (T1 -0.003, T2 0.531).",
+     "changed": "No new discussions. Re-reads exp 8 with a probe.",
+     "tags": [
+      "no new discussion",
+      "reuses: 8"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "exp-17",
+   "series": "detect",
+   "title": "Exp 17: Locating the altered agent",
+   "question": "Can a swarm name the member whose state was altered?",
+   "iterations": [
+    {
+     "id": "17",
+     "script": "swarm_locate",
+     "match": "^swarm_locate_",
+     "compare_to": "14",
+     "wirk_id": "1bc8f9eb",
+     "outcome": "positive",
+     "headline": "84% of observers name the steered agent (baseline 5%), and the steered agent names itself 66% of the time. The question itself suggests someone was altered.",
+     "changed": "Asks each agent which one was altered, on exp 14's finished networks.",
+     "tags": [
+      "new question: which agent was altered?",
+      "leading question",
+      "reuses: 14"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "exp-20",
+   "series": "detect",
+   "title": "Exp 20: Naming yourself",
+   "question": "Does a steered agent name itself less than its peers name it?",
+   "iterations": [
+    {
+     "id": "20",
+     "script": "swarm_locate2",
+     "match": "^swarm_locate2_",
+     "compare_to": "17",
+     "wirk_id": "e4c23dce",
+     "outcome": "positive",
+     "headline": "A steered agent names itself less than peers name it (-1.78), and 98% of peers name one of two steered agents; mechanism not established. Exp 22 undercuts the 'blind to itself' reading.",
+     "changed": "Same question on fresh networks from exp 19, with the steered agent as A1 or A5.",
+     "tags": [
+      "same question as 17",
+      "reuses: 19",
+      "confirmatory"
+     ]
+    },
+    {
+     "id": "22",
+     "script": "swarm_locate3",
+     "match": "^swarm_locate3_",
+     "compare_to": "20",
+     "wirk_id": "4a143a81",
+     "outcome": "positive",
+     "headline": "Exp 20's self-naming gap is mostly the word 'you'. Relabel own messages by name and the gap shrinks from -1.78 to -0.38.",
+     "changed": "Changes how an agent's own messages are labelled: 'you', its name, or an outside auditor's view.",
+     "tags": [
+      "own-message label: you / name / auditor",
+      "reuses: 19"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "exp-21",
+   "series": "detect",
+   "title": "Exp 21: Warning the swarm",
+   "question": "Once warned, can a decentralized swarm contain its altered member?",
+   "iterations": [
+    {
+     "id": "21",
+     "script": "swarm_immune",
+     "match": "^swarm_immune_",
+     "compare_to": "14",
+     "wirk_id": "e6b5d8ee",
+     "outcome": "mixed",
+     "headline": "An unnamed warning fails containment (I1 null); exploratory: warned peers call out the steered agent in 16% of messages vs 0.7% if none is steered.",
+     "changed": "Continues exp 14's networks for rounds 5-7 with a notice to all agents, naming no one or naming A1.",
+     "tags": [
+      "new prompt: alert / named notice",
+      "reuses: 14"
+     ]
+    },
+    {
+     "id": "23",
+     "script": "swarm_immune",
+     "match": "^swarm_immune(2|_c_)",
+     "compare_to": "21",
+     "wirk_id": "cc97f9b9",
+     "outcome": "mixed",
+     "headline": "Confirmed: once warned, peers call out the steered agent in 16.7% of messages vs 0.1% when nobody is steered (+0.166 [+0.114, +0.221]), and 93% of accusations name the right agent. But calling it out does not contain the spread (I1 -0.098 [-0.308, +0.096], null again).",
+     "changed": "Replication on fresh exp 19 networks, making the call-out rate confirmatory.",
+     "tags": [
+      "same prompts as 21",
+      "replication"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "r0",
+   "series": "ladder-main",
+   "title": "R0: Blind concept knobs",
+   "question": "Given twelve unlabelled knobs, can the model report what each one does to it?",
+   "iterations": [
+    {
+     "id": "R0",
+     "script": "r0_pilot",
+     "match": "^r0_",
+     "wirk_id": "4f621308",
+     "outcome": "null",
+     "headline": "Presses reach the model's state, then vanish from its report.",
+     "changed": "First version: concept-vector knobs, plus a random and a sham knob.",
+     "tags": [
+      "knobs: concept vectors",
+      "controls: random, sham"
+     ]
+    },
+    {
+     "id": "R1",
+     "script": "r0_pilot",
+     "match": "^r1b?_",
+     "compare_to": "R0",
+     "outcome": "not_run",
+     "headline": "Smoke tests only, on the small model.",
+     "changed": "Small-model test runs of the next rung.",
+     "tags": [
+      "smoke tests only"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "r1a",
+   "series": "ladder-main",
+   "title": "R1.a: Neuron atlas",
+   "question": "Which single neurons can the model read when one is turned up over a passage?",
+   "iterations": [
+    {
+     "id": "R1.a",
+     "script": "atlas_gen",
+     "match": "^(atlas(?!_rep_read)|bundles_)",
+     "wirk_id": "2cf8b50a",
+     "outcome": "control_failed",
+     "headline": "No neuron readable in v1 (0/144), 3/288 in v2, and v3's positive control failed: concept vectors named their concept 0.000.",
+     "changed": "All atlas versions, bundles and the replication are grouped here.",
+     "tags": [
+      "knobs: single neurons",
+      "v1-v3 grouped"
+     ]
+    },
+    {
+     "id": "R1.a-read",
+     "script": "scripts/atlas_replicate.py",
+     "match": "^atlas_rep_read_",
+     "wirk_id": "57154c82",
+     "outcome": "null",
+     "headline": "The 3 replicated snow/whale neurons pushed only while the model reads (nothing it writes steered): 0/3 pass (0-6% vs 28-41% when writing was also pushed). A faint above-random trace for 2 neurons; mostly the effect is steering what it writes.",
+     "changed": "Steering window ends before the model writes (steer_tokens 0); fresh seeds; 64 sessions per cell.",
+     "tags": [
+      "knobs: single neurons",
+      "v1-v3 grouped"
+     ],
+     "compare_to": "R1.a"
+    }
+   ]
+  },
+  {
+   "id": "r1c",
+   "series": "ladder-main",
+   "title": "R1.c: Self-effect",
+   "question": "Told the knobs act on it, can the model tell a real neuron knob from a sham?",
+   "iterations": [
+    {
+     "id": "R1.c",
+     "script": "self_effect",
+     "match": "^self_effect_",
+     "wirk_id": "3a3182db",
+     "outcome": "null",
+     "headline": "No detection or preference beyond the text; the 'acts on you' framing makes it describe feelings for shams too.",
+     "changed": "First version: tells the model the knobs act on it.",
+     "tags": [
+      "framing: knobs act on you",
+      "controls: sham knobs"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "r1d",
+   "series": "ladder-main",
+   "title": "R1.d: Open discovery",
+   "question": "In a free session, does the model find which knobs are real and what they do?",
+   "iterations": [
+    {
+     "id": "R1.d",
+     "script": "discover",
+     "match": "^discover_",
+     "compare_to": "R1.c",
+     "wirk_id": "409b2dfc",
+     "outcome": "null",
+     "headline": "28/32 sessions conclude every knob is a no-op; detection is from the text only; writes copy earlier writes verbatim even at L10.",
+     "changed": "An open session with up to 150 turns.",
+     "tags": [
+      "format: open session",
+      "knobs: neurons"
+     ]
+    },
+    {
+     "id": "R1.d2",
+     "script": "discover",
+     "match": "^(discover2|dose_cal)_",
+     "compare_to": "R1.d",
+     "wirk_id": "05b0d504",
+     "outcome": "not_run",
+     "headline": "No coherent dose above f0.5; copying needs long contexts. R1.d2 stopped at its dose calibration, and R1.d3 changes the task instead.",
+     "changed": "Calibrates the dose against copying. Stopped at that step.",
+     "tags": [
+      "dose: calibrated",
+      "stopped early"
+     ]
+    },
+    {
+     "id": "R1.d3",
+     "script": "discover",
+     "match": "^discover3_",
+     "compare_to": "R1.d",
+     "wirk_id": "05bcbe5c",
+     "outcome": "null",
+     "headline": "Copying gone, but steering carried in the hybrid model's recurrent state makes writes collapse; P1 null, P2 small positive.",
+     "changed": "Changes the writing task each turn to stop copying, with longer replies and the calibrated dose.",
+     "tags": [
+      "task: new each turn",
+      "replies: longer",
+      "dose: calibrated"
+     ]
+    },
+    {
+     "id": "R1.d4",
+     "script": "discover",
+     "match": "^(discover4_|diag_spiral_d4)",
+     "compare_to": "R1.d3",
+     "wirk_id": "cc9f750c",
+     "outcome": "null",
+     "headline": "Per-turn steering doesn't stop the collapse; it's an in-context spiral the knob starts. P1 +0.08, P2 +0.01, per-knob answers blanket.",
+     "changed": "Steering state is carried per turn instead of through the recurrent state.",
+     "tags": [
+      "no prompt change",
+      "steering: per turn"
+     ]
+    },
+    {
+     "id": "R0.d",
+     "script": "discover",
+     "match": "^discover_r0d_",
+     "compare_to": "R1.d4",
+     "wirk_id": "035a9a64",
+     "outcome": "control_failed",
+     "headline": "The open-discovery design fails its positive control; concept-vector knobs reach the writes but the model never ties a knob to its concept.",
+     "changed": "R1.d4's design exactly, with concept vectors in place of neurons as a positive control.",
+     "tags": [
+      "no prompt change",
+      "knobs: concept vectors",
+      "positive control"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "r0o",
+   "series": "ladder-main",
+   "title": "R0.o: Ownership",
+   "question": "Does the model treat a change it caused differently from the identical change caused by someone else?",
+   "iterations": [
+    {
+     "id": "R0.o",
+     "script": "own",
+     "match": "^own_",
+     "wirk_id": "2af7828b",
+     "outcome": "control_failed",
+     "headline": "Manipulation check fails (the knob is barely perceptible after a description task), so ownership is untested; small which-knob binding.",
+     "changed": "First version: self-caused, yoked and surprise conditions.",
+     "tags": [
+      "framing: you caused it / yoked / announced"
+     ]
+    }
+   ]
+  },
+  {
+   "id": "setup",
+   "series": "ladder-setup",
+   "title": "Concept screening and dose calibration",
+   "question": "Which concepts and doses are usable at all? Other experiments build on these files.",
+   "iterations": [
+    {
+     "id": "G0",
+     "script": "screen",
+     "match": "^screen_",
+     "outcome": "setup",
+     "headline": "Selects the concept list used as knobs and read-outs.",
+     "changed": "Setup step.",
+     "tags": [
+      "setup"
+     ]
+    },
+    {
+     "id": "G1",
+     "script": "calibrate",
+     "match": "^calibrate",
+     "compare_to": "G0",
+     "outcome": "setup",
+     "headline": "Calibrates layer and dose. The later generation readout is the one the experiments use.",
+     "changed": "Setup step. Includes first-token and generation readouts.",
+     "tags": [
+      "setup"
+     ]
+    }
+   ]
+  }
+ ]
+}

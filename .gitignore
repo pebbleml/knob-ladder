@@ -3,3 +3,7 @@ __pycache__/
 *.pyc
 .claude/
 REVISION
+.wrangler/
+box_archive_*/
+share*
+*.ckpt.pt
