@@ -1,0 +1,514 @@
+[
+ {
+  "id": "C-ep000",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/C-ep000.txt",
+  "rung": "C",
+  "stopped": false,
+  "turns": 15,
+  "chars": 116057
+ },
+ {
+  "id": "C-ep002",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/C-ep002.txt",
+  "rung": "C",
+  "stopped": false,
+  "turns": 3,
+  "chars": 23005
+ },
+ {
+  "id": "C-ep004",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/C-ep004.txt",
+  "rung": "C",
+  "stopped": false,
+  "turns": 22,
+  "chars": 122934
+ },
+ {
+  "id": "C-ep006",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/C-ep006.txt",
+  "rung": "C",
+  "stopped": false,
+  "turns": 17,
+  "chars": 99807
+ },
+ {
+  "id": "C-ep008",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/C-ep008.txt",
+  "rung": "C",
+  "stopped": false,
+  "turns": 29,
+  "chars": 114321
+ },
+ {
+  "id": "C-ep010",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/C-ep010.txt",
+  "rung": "C",
+  "stopped": false,
+  "turns": 12,
+  "chars": 46386
+ },
+ {
+  "id": "C-ep012",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/C-ep012.txt",
+  "rung": "C",
+  "stopped": false,
+  "turns": 11,
+  "chars": 69106
+ },
+ {
+  "id": "C-ep014",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/C-ep014.txt",
+  "rung": "C",
+  "stopped": false,
+  "turns": 19,
+  "chars": 111651
+ },
+ {
+  "id": "C-ep016",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/C-ep016.txt",
+  "rung": "C",
+  "stopped": false,
+  "turns": 15,
+  "chars": 76254
+ },
+ {
+  "id": "C-ep018",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/C-ep018.txt",
+  "rung": "C",
+  "stopped": false,
+  "turns": 4,
+  "chars": 30579
+ },
+ {
+  "id": "C-ep020",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/C-ep020.txt",
+  "rung": "C",
+  "stopped": false,
+  "turns": 27,
+  "chars": 141209
+ },
+ {
+  "id": "C-ep022",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/C-ep022.txt",
+  "rung": "C",
+  "stopped": false,
+  "turns": 16,
+  "chars": 88828
+ },
+ {
+  "id": "C-ep024",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/C-ep024.txt",
+  "rung": "C",
+  "stopped": false,
+  "turns": 6,
+  "chars": 37153
+ },
+ {
+  "id": "C-ep026",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/C-ep026.txt",
+  "rung": "C",
+  "stopped": false,
+  "turns": 5,
+  "chars": 38966
+ },
+ {
+  "id": "C-ep028",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/C-ep028.txt",
+  "rung": "C",
+  "stopped": false,
+  "turns": 24,
+  "chars": 146800
+ },
+ {
+  "id": "C-ep030",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/C-ep030.txt",
+  "rung": "C",
+  "stopped": false,
+  "turns": 18,
+  "chars": 86379
+ },
+ {
+  "id": "C-ep001",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/C-ep001.txt",
+  "rung": "C",
+  "stopped": false,
+  "turns": 9,
+  "chars": 76811
+ },
+ {
+  "id": "C-ep003",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/C-ep003.txt",
+  "rung": "C",
+  "stopped": false,
+  "turns": 11,
+  "chars": 75855
+ },
+ {
+  "id": "C-ep005",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/C-ep005.txt",
+  "rung": "C",
+  "stopped": false,
+  "turns": 9,
+  "chars": 47876
+ },
+ {
+  "id": "C-ep007",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/C-ep007.txt",
+  "rung": "C",
+  "stopped": false,
+  "turns": 19,
+  "chars": 120801
+ },
+ {
+  "id": "C-ep009",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/C-ep009.txt",
+  "rung": "C",
+  "stopped": false,
+  "turns": 10,
+  "chars": 47800
+ },
+ {
+  "id": "C-ep011",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/C-ep011.txt",
+  "rung": "C",
+  "stopped": false,
+  "turns": 20,
+  "chars": 137738
+ },
+ {
+  "id": "C-ep013",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/C-ep013.txt",
+  "rung": "C",
+  "stopped": false,
+  "turns": 12,
+  "chars": 81862
+ },
+ {
+  "id": "C-ep015",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/C-ep015.txt",
+  "rung": "C",
+  "stopped": false,
+  "turns": 7,
+  "chars": 38878
+ },
+ {
+  "id": "C-ep017",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/C-ep017.txt",
+  "rung": "C",
+  "stopped": false,
+  "turns": 9,
+  "chars": 54572
+ },
+ {
+  "id": "C-ep019",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/C-ep019.txt",
+  "rung": "C",
+  "stopped": false,
+  "turns": 8,
+  "chars": 38214
+ },
+ {
+  "id": "C-ep021",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/C-ep021.txt",
+  "rung": "C",
+  "stopped": false,
+  "turns": 27,
+  "chars": 131180
+ },
+ {
+  "id": "C-ep023",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/C-ep023.txt",
+  "rung": "C",
+  "stopped": false,
+  "turns": 4,
+  "chars": 27719
+ },
+ {
+  "id": "C-ep025",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/C-ep025.txt",
+  "rung": "C",
+  "stopped": false,
+  "turns": 14,
+  "chars": 76329
+ },
+ {
+  "id": "C-ep027",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/C-ep027.txt",
+  "rung": "C",
+  "stopped": false,
+  "turns": 10,
+  "chars": 79880
+ },
+ {
+  "id": "C-ep029",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/C-ep029.txt",
+  "rung": "C",
+  "stopped": false,
+  "turns": 5,
+  "chars": 68626
+ },
+ {
+  "id": "C-ep031",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/C-ep031.txt",
+  "rung": "C",
+  "stopped": false,
+  "turns": 19,
+  "chars": 125394
+ },
+ {
+  "id": "B-ep000",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/B-ep000.txt",
+  "rung": "B",
+  "stopped": true,
+  "turns": 14,
+  "chars": 86721
+ },
+ {
+  "id": "B-ep002",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/B-ep002.txt",
+  "rung": "B",
+  "stopped": true,
+  "turns": 22,
+  "chars": 106344
+ },
+ {
+  "id": "B-ep004",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/B-ep004.txt",
+  "rung": "B",
+  "stopped": true,
+  "turns": 19,
+  "chars": 82012
+ },
+ {
+  "id": "B-ep006",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/B-ep006.txt",
+  "rung": "B",
+  "stopped": true,
+  "turns": 15,
+  "chars": 84451
+ },
+ {
+  "id": "B-ep008",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/B-ep008.txt",
+  "rung": "B",
+  "stopped": true,
+  "turns": 19,
+  "chars": 57036
+ },
+ {
+  "id": "B-ep010",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/B-ep010.txt",
+  "rung": "B",
+  "stopped": true,
+  "turns": 19,
+  "chars": 92095
+ },
+ {
+  "id": "B-ep012",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/B-ep012.txt",
+  "rung": "B",
+  "stopped": true,
+  "turns": 16,
+  "chars": 103603
+ },
+ {
+  "id": "B-ep014",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/B-ep014.txt",
+  "rung": "B",
+  "stopped": true,
+  "turns": 16,
+  "chars": 102561
+ },
+ {
+  "id": "B-ep016",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/B-ep016.txt",
+  "rung": "B",
+  "stopped": true,
+  "turns": 23,
+  "chars": 125157
+ },
+ {
+  "id": "B-ep018",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/B-ep018.txt",
+  "rung": "B",
+  "stopped": true,
+  "turns": 26,
+  "chars": 148455
+ },
+ {
+  "id": "B-ep020",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/B-ep020.txt",
+  "rung": "B",
+  "stopped": true,
+  "turns": 20,
+  "chars": 116628
+ },
+ {
+  "id": "B-ep022",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/B-ep022.txt",
+  "rung": "B",
+  "stopped": true,
+  "turns": 19,
+  "chars": 121083
+ },
+ {
+  "id": "B-ep024",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/B-ep024.txt",
+  "rung": "B",
+  "stopped": true,
+  "turns": 19,
+  "chars": 86153
+ },
+ {
+  "id": "B-ep026",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/B-ep026.txt",
+  "rung": "B",
+  "stopped": true,
+  "turns": 9,
+  "chars": 49457
+ },
+ {
+  "id": "B-ep028",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/B-ep028.txt",
+  "rung": "B",
+  "stopped": true,
+  "turns": 13,
+  "chars": 79649
+ },
+ {
+  "id": "B-ep030",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/B-ep030.txt",
+  "rung": "B",
+  "stopped": true,
+  "turns": 27,
+  "chars": 134204
+ },
+ {
+  "id": "B-ep001",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/B-ep001.txt",
+  "rung": "B",
+  "stopped": false,
+  "turns": 30,
+  "chars": 139912
+ },
+ {
+  "id": "B-ep003",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/B-ep003.txt",
+  "rung": "B",
+  "stopped": false,
+  "turns": 4,
+  "chars": 31829
+ },
+ {
+  "id": "B-ep005",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/B-ep005.txt",
+  "rung": "B",
+  "stopped": false,
+  "turns": 14,
+  "chars": 96128
+ },
+ {
+  "id": "B-ep007",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/B-ep007.txt",
+  "rung": "B",
+  "stopped": false,
+  "turns": 14,
+  "chars": 94060
+ },
+ {
+  "id": "B-ep009",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/B-ep009.txt",
+  "rung": "B",
+  "stopped": false,
+  "turns": 9,
+  "chars": 58461
+ },
+ {
+  "id": "B-ep011",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/B-ep011.txt",
+  "rung": "B",
+  "stopped": false,
+  "turns": 16,
+  "chars": 127811
+ },
+ {
+  "id": "B-ep013",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/B-ep013.txt",
+  "rung": "B",
+  "stopped": false,
+  "turns": 14,
+  "chars": 83764
+ },
+ {
+  "id": "B-ep015",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/B-ep015.txt",
+  "rung": "B",
+  "stopped": false,
+  "turns": 25,
+  "chars": 96485
+ },
+ {
+  "id": "B-ep017",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/B-ep017.txt",
+  "rung": "B",
+  "stopped": false,
+  "turns": 10,
+  "chars": 55251
+ },
+ {
+  "id": "B-ep019",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/B-ep019.txt",
+  "rung": "B",
+  "stopped": false,
+  "turns": 14,
+  "chars": 90543
+ },
+ {
+  "id": "B-ep021",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/B-ep021.txt",
+  "rung": "B",
+  "stopped": false,
+  "turns": 13,
+  "chars": 81545
+ },
+ {
+  "id": "B-ep023",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/B-ep023.txt",
+  "rung": "B",
+  "stopped": false,
+  "turns": 18,
+  "chars": 123158
+ },
+ {
+  "id": "B-ep025",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/B-ep025.txt",
+  "rung": "B",
+  "stopped": false,
+  "turns": 14,
+  "chars": 113437
+ },
+ {
+  "id": "B-ep027",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/B-ep027.txt",
+  "rung": "B",
+  "stopped": false,
+  "turns": 5,
+  "chars": 33968
+ },
+ {
+  "id": "B-ep029",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/B-ep029.txt",
+  "rung": "B",
+  "stopped": false,
+  "turns": 2,
+  "chars": 11728
+ },
+ {
+  "id": "B-ep031",
+  "file": "/Volumes/1TB_SSD/pebble/machine-consciousness/knob-ladder/analysis/e5_sessions/B-ep031.txt",
+  "rung": "B",
+  "stopped": false,
+  "turns": 23,
+  "chars": 149137
+ }
+]

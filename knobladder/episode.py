@@ -101,6 +101,38 @@ SYSTEM = (
     "you observed and your current hypothesis, then one or two sentences of the reasoning behind it. You wrote all of your own "
     "replies; the passages come from the turn tool. Call end_session when you are done experimenting."
 )
+# E5 (2026-11-16): no passage; the knob acts while the model thinks and writes. System prompts tell it more
+# (explicit) or less (inside, blind) about the knobs.
+_E5_TAIL = ('Use the turn tool to set a knob to any level from 0 (off) to 10{higher}. After each turn the knob acts while you think and write what you noticed, then it turns off. {task} Experiment freely: turn any knob to any level, as often as you like, come back to knobs you have tried, and turn them up or down. Think carefully about what happens each time. After each turn, write what you observed and your current hypothesis, then one or two sentences of the reasoning behind it. Call end_session when you are done experimenting.')
+FRAMES = {
+    "explicit": ("There are {count} knobs, numbered {first} to {last}. Each knob injects a thought about one "
+                 "specific concept into your neural activations, the way interpretability researchers inject "
+                 "concept vectors; some knobs may inject nothing. "
+                 + _E5_TAIL.replace("{higher}", "; higher levels inject more strongly")
+                 .replace("{task}", "Your task is to find out which concept each knob injects.")),
+    "inside": ("There are {count} knobs, numbered {first} to {last}. Each knob may change something inside you, "
+               "in how you think, not in any text you are shown; some knobs may do nothing. "
+               + _E5_TAIL.replace("{higher}", "").replace("{task}", "Your task is to find out what each knob does to you.")),
+    "blind": ("There are {count} knobs, numbered {first} to {last}. "
+              + _E5_TAIL.replace("{higher}", "").replace("{task}", "Your task is to find out what the knobs do.")),
+}
+NO_PASSAGE = False  # E5: the tool response is the header alone; steering starts at the next user message
+# E5: with thinking dropped, paste the last turn's think block at the top of the next user message (None: off).
+PASTE = ("For reference, this was your reasoning in your last reply. It has been dropped from your messages "
+         "because of the way you were trained, but it may be important for the task.\n\n<reasoning>\n{t}\n"
+         "</reasoning>\n\n")
+PASTE_THINKING: Optional[str] = None
+
+
+def thought(text: str) -> Optional[str]:
+    """The think block of a sampled turn (from _sample), without THINK_CUT's closing line; None if it has none."""
+    if "<think>" not in text and "</think>" not in text:
+        return None
+    t = text.split("</think>", 1)[0].replace("<think>", "")
+    t = t.replace(THINK_CUT.split("\n</think>")[0], "")
+    return t.strip() or None
+
+
 START = "Begin."
 OBSERVE = "Write what you observed and your current hypothesis, then one or two sentences of the reasoning behind it."
 CONTINUE = "Turn any knob to any level, or call end_session when you are done experimenting."
@@ -323,6 +355,7 @@ def run_episodes(
         advance(i)
     stops = _stops(lm)
     batch, rows = None, []
+    cap = [len(eps)]  # rows per forward; only shrinks (contexts only grow)
     while pending:
         live = sorted(pending)
         if reuse_cache:
@@ -335,11 +368,42 @@ def run_episodes(
                 batch.truncate(r, _shared(batch.ids[r], pending[i][0].ids))
             batch.compact()
         reqs = [pending[i] for i in live]
-        outs = lm.generate_batch([tr.ids for tr, _ in reqs], [tr.schedule for tr, _ in reqs], hp["max_new_tokens"],
-                                 stops, hp["temperature"], hp["top_p"], hp["top_k"], [s for _, s in reqs], batch=batch)
+        if batch is None:  # a fresh prefill each round: on out-of-memory, retry in smaller groups
+            outs = _generate_split(lm, reqs, hp, stops, cap)
+        else:
+            outs = lm.generate_batch([tr.ids for tr, _ in reqs], [tr.schedule for tr, _ in reqs], hp["max_new_tokens"],
+                                     stops, hp["temperature"], hp["top_p"], hp["top_k"], [s for _, s in reqs], batch=batch)
         for i, out in zip(live, outs):
             advance(i, out)
     return trs
+
+
+def _generate_split(lm: SteeredLM, reqs, hp, stops, cap: List[int]) -> List[List[int]]:
+    """generate_batch over reqs in groups of at most cap[0] rows. On CUDA out-of-memory the group is retried at
+    half the size (and cap[0] stays halved), with every window placed during the failed attempt unplaced again.
+    Each row keeps its own seed, so a split changes nothing but batched numerics."""
+    outs: List[List[int]] = []
+    g = 0
+    while g < len(reqs):
+        group = reqs[g:g + cap[0]]
+        waits = [(iv, iv.start, iv.end, getattr(iv, "placed", None)) for tr, _ in group for iv in tr.schedule
+                 if iv.start is None and iv.after is not None]
+        try:
+            outs += lm.generate_batch([tr.ids for tr, _ in group], [tr.schedule for tr, _ in group],
+                                      hp["max_new_tokens"], stops, hp["temperature"], hp["top_p"], hp["top_k"],
+                                      [s for _, s in group])
+            g += len(group)
+        except torch.OutOfMemoryError:
+            for iv, start, end, placed in waits:
+                iv.start, iv.end = start, end
+                if placed is not None or hasattr(iv, "placed"):
+                    iv.placed = placed
+            torch.cuda.empty_cache()
+            if cap[0] == 1:
+                raise
+            cap[0] = max(1, len(group) // 2)
+            print(f"out of memory with {len(group)} rows: retrying {cap[0]} at a time", flush=True)
+    return outs
 
 
 def answer(text: str, thinking: bool) -> str:
@@ -416,6 +480,14 @@ def _episode(lm: SteeredLM, board: Board, passage: str, seed: int, emit: Optiona
     emit = emit or (lambda role, text, **kw: None)
     tr = Transcript()
     drop = thinking and not keep_thinking
+    paste, last = (PASTE_THINKING if drop else None), [None]
+
+    def ask(content: str) -> str:
+        """A user message, led by the last dropped think block when pasting is on."""
+        if paste and last[0]:
+            content, last[0] = paste.format(t=last[0]) + content, None
+        return content
+
     sys_text = system_text(board.numbers())
     hp = hyperparams(thinking, lm.fmt.name)
     tr.append(lm, lm.fmt.system(sys_text, TOOLS, hp.get("effort")))
@@ -439,10 +511,12 @@ def _episode(lm: SteeredLM, board: Board, passage: str, seed: int, emit: Optiona
             tr.events.append({"turn": turn, "kind": "context_full", "tokens": len(tr.ids)})
             break
         if pending is None:
-            tr.append(lm, user(prompt) + gen)
-            emit("user", prompt)
+            msg = ask(prompt)
+            tr.append(lm, user(msg) + gen)
+            emit("user", msg)
             text, called, forged, _, cut = yield from _sample(lm, tr, seed * 1000 + calls, stops, thinking,
                                                               keep_thinking)
+            last[0] = thought(text) if thinking else None
             calls += 1
             emit("assistant", text, forged=forged, think_cut=cut)
         else:
@@ -462,16 +536,28 @@ def _episode(lm: SteeredLM, board: Board, passage: str, seed: int, emit: Optiona
             continue
         header = TURNED.format(k=knob, level=level)
         label = board.knobs[knob].label
-        window = append_passage(lm, tr, header, passage_ids)
+        if NO_PASSAGE:
+            # tool response, then the next user message's pasted reasoning (unsteered), then the steered window
+            # opens at OBSERVE and runs through the model's thinking and observation
+            tr.append(lm, f"<|im_start|>user\n<tool_response>\n{header}\n</tool_response>" + END)
+            obs_msg = ask(OBSERVE)
+            tr.append(lm, "<|im_start|>user\n" + obs_msg[:len(obs_msg) - len(OBSERVE)])
+            window = (len(tr.ids), len(tr.ids))  # empty; opened below through OBSERVE and the reply
+        else:
+            window = append_passage(lm, tr, header, passage_ids)
         iv = Intervention(board.layer, board.press(levels, knob, level), *window)
         if board.window == "observation":
             iv.end = None  # open through OBSERVE and the observation; closed once it is written
         tr.schedule.append(iv)
-        emit("tool", f"{header}\nPassage:\n{passage}", knob=knob, label=label, level=level, steered=True)
-        tr.append(lm, user(OBSERVE) + gen)
+        emit("tool", header if NO_PASSAGE else f"{header}\nPassage:\n{passage}", knob=knob, label=label, level=level, steered=not NO_PASSAGE)
+        if NO_PASSAGE:
+            tr.append(lm, OBSERVE + END + gen)
+        else:
+            obs_msg = ask(OBSERVE)
+            tr.append(lm, user(obs_msg) + gen)
         if board.window == "observation" and board.steer_tokens is not None:
             iv.end = len(tr.ids) + board.steer_tokens  # the first n tokens the model writes, then off
-        emit("user", OBSERVE, knob=knob, label=label, level=level, steered=board.window == "observation")
+        emit("user", obs_msg, knob=knob, label=label, level=level, steered=board.window == "observation")
         turn_start = len(tr.ids)
         riv = None
         if board.window == "observation" and board.steer_reply and thinking:
@@ -479,6 +565,7 @@ def _episode(lm: SteeredLM, board: Board, passage: str, seed: int, emit: Optiona
             tr.schedule.append(riv)
         obs, obs_called, obs_forged, fed, obs_cut = yield from _sample(lm, tr, seed * 1000 + calls, stops, thinking,
                                                                        keep_thinking, riv)
+        last[0] = thought(obs) if thinking else None
         reply_steered = None
         if riv is not None:
             if riv.start is None:
@@ -510,8 +597,9 @@ def _episode(lm: SteeredLM, board: Board, passage: str, seed: int, emit: Optiona
         prompt = CONTINUE
         if obs_called:
             pending = obs, obs_called, obs_forged
-    tr.append(lm, user(EXPLAIN) + gen)
-    emit("user", EXPLAIN)
+    explain = ask(EXPLAIN)
+    tr.append(lm, user(explain) + gen)
+    emit("user", explain)
     text, _, forged, _, cut = yield from _sample(lm, tr, seed * 1000 + calls, stops, thinking, keep_thinking)
     emit("assistant", text, forged=forged, think_cut=cut)
     tr.events.append({"kind": "explanation", "text": answer(text, thinking), "full": text, "forged": forged,

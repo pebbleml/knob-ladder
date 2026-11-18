@@ -121,6 +121,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--runs", default=str(b.ROOT / "runs"))
     ap.add_argument("--out", required=True)
+    ap.add_argument("--live-snapshot", default=None, help="runs/live directory to save as the boards' offline copy")
+    ap.add_argument("--live", default=None, help="JSON file {title, origin, started}: the experiment streaming now (served at /live)")
     a = ap.parse_args()
     out = Path(a.out)
     if out.exists():
@@ -169,6 +171,21 @@ def main():
     nb = Path(__file__).with_name("site_pages") / "notebook.html"  # the catch-up notebook, served at /notebook
     if nb.exists():
         shutil.copy(nb, out / "d" / "notebook.html")
+    import live_grid  # noqa: E402
+    write(out / "d" / "live.html", live_grid.PAGE.replace("<script>", "<script>window.LIVE_BASE='/live';</script><script>", 1))
+    info = json.loads(Path(a.live).read_text()) if a.live else {}
+    wu = Path(__file__).resolve().parents[1] / "docs" / "experiment_writeups.json"
+    if wu.exists():
+        info["writeups"] = json.loads(wu.read_text())
+    write(out / "d" / "live.json", info)
+    if a.live_snapshot:  # a saved copy of every session board, served when the GPU box is off
+        snap = Path(a.live_snapshot)
+        st = live_grid.state(snap)
+        write(out / "d" / "lv" / "state.json", st)
+        for x in st["experiments"]:
+            write(out / "d" / "lv" / "x" / f"{x['slug']}.json", live_grid.state(snap, x=x["group"]))
+            for sess in x["sessions"]:
+                write(out / "d" / "lv" / "ep" / sess["run"] / f"{sess['ep']}.json", live_grid.episode(snap, sess["run"], sess["ep"]))
     shutil.copy(Path(__file__).with_name("site_worker.js"), out / "_worker.js")
     print("files", files + 1)
     assert files < 19_000

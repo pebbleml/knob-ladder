@@ -240,6 +240,44 @@ export default {
         const nb = await s.text("notebook.html");
         if (nb) return send(nb, "text/html");
       }
+      if (path === "/live") {  // the live dashboard of the experiment running now (scripts/live_grid.py)
+        const page = await s.text("live.html");
+        if (page) return send(page, "text/html", 200, { "Cache-Control": "no-store" });
+      }
+      if (path === "/live/api/state" || path === "/live/api/ep") {
+        // Streamed from the GPU box through a Cloudflare tunnel; if the box is off, the copy saved at the last build.
+        const info = await s.json("live.json");
+        if (info && info.origin) {
+          try {
+            const r = await fetch(info.origin + path.slice(5) + url.search, { headers: { Accept: "application/json" }, signal: AbortSignal.timeout(6000) });
+            if (r.ok && path === "/live/api/state") {
+              // The box only holds what it is running; older experiments come from the saved copy.
+              const live = await r.json(), x = url.searchParams.get("x");
+              const sl = v => v.replace(/[^A-Za-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+              const have = new Set((live.experiments || []).map(e => e.slug));
+              if (x && !have.has(sl(x))) {
+                const saved = await s.text(`lv/x/${sl(x)}.json`);
+                if (saved) return send(saved, "application/json", 200, { "Cache-Control": "no-store" });
+              }
+              const old = (await s.json("lv/state.json")) || { experiments: [] };
+              for (const e of old.experiments || []) if (!have.has(e.slug)) live.experiments.push(e);
+              live.experiments.sort((a, b) => b.started - a.started);
+              return send(JSON.stringify(live), "application/json", 200, { "Cache-Control": "no-store" });
+            }
+            if (r.ok) {  // a session the box does not hold comes back empty: use the saved copy
+              const ep = await r.text();
+              if (!/"events":\s*\[\s*\]/.test(ep)) return send(ep, "application/json", 200, { "Cache-Control": "no-store" });
+            }
+          } catch (e) { /* fall through to the saved copy */ }
+        }
+        const q = url.searchParams, slug = x => x.replace(/[^A-Za-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+        let body = null;
+        if (path === "/live/api/state") body = await s.text(q.get("x") ? `lv/x/${slug(q.get("x"))}.json` : "lv/state.json");
+        else if (safeId(q.get("run") || "") && /^\d+$/.test(q.get("ep") || "")) body = await s.text(`lv/ep/${q.get("run")}/${+q.get("ep")}.json`);
+        if (!body) throw new ApiError(404, "not_saved", "Not in the saved copy.");
+        return send(body, "application/json", 200, { "Cache-Control": "no-store" });
+      }
+      if (path === "/live/info") return send(JSON.stringify((await s.json("live.json")) || {}), "application/json", 200, { "Cache-Control": "no-store" });
       if (path === "/llms.txt") return send((await s.text("guide.txt")).replaceAll("__BASE__", url.origin).replace(/^Auth:.*$/m, "Auth: none. This API is public and read-only."), "text/plain");
       if (path === "/openapi.json") return send((await s.text("openapi.json")).replaceAll("__BASE__", url.origin), "application/json");
       if (path === "/api/v1" || path.startsWith("/api/v1/")) return sendJson(await route(s, path.slice(7), url.searchParams));

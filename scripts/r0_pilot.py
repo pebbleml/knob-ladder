@@ -60,6 +60,11 @@ def main():
     ap.add_argument("--stop-file", default=str(ROOT / "runs" / "STOP"),
                     help="once this file exists, each episode gives its final hypothesis and stops (budget)")
     ap.add_argument("--thinking", action="store_true", help="thinking mode for episode turns (not discovery)")
+    ap.add_argument("--frame", default=None, choices=["blind", "inside", "explicit"],
+                    help="E5: no passage; the system prompt says this much about the knobs (episode.FRAMES)")
+    ap.add_argument("--group", default=None, help="experiment name shown in the live dashboard (runs sharing it are one experiment)")
+    ap.add_argument("--paste-thinking", action="store_true",
+                    help="E5: with --thinking (dropped), paste each think block at the top of the next user message")
     ap.add_argument("--keep-thinking", action="store_true",
                     help="with --thinking: keep past think blocks in the history (Qwen3's template drops them; "
                          "Qwen3.8's keeps them by default)")
@@ -116,6 +121,12 @@ def main():
     if args.reuse_cache and lm.hybrid and args.thinking and not args.keep_thinking:
         sys.exit("--reuse-cache on a hybrid model needs --keep-thinking: a recurrent state cannot drop a think block")
     episode.MAX_TURNS, episode.MAX_CONTEXT = args.max_turns, args.max_context
+    if args.frame:
+        assert args.window == "observation", "--frame (no passage) needs --window observation"
+        episode.SYSTEM, episode.NO_PASSAGE = episode.FRAMES[args.frame], True
+    if args.paste_thinking:
+        assert args.thinking and not args.keep_thinking, "--paste-thinking needs --thinking without --keep-thinking"
+        episode.PASTE_THINKING = episode.PASTE
     if args.think_tokens:
         THINKING[lm.fmt.name]["max_new_tokens"] = args.think_tokens
     if args.effort:
@@ -165,7 +176,10 @@ def main():
         print(f"probe L{probe_layer} holdout acc {probe.holdout_accuracy:.2f}")
 
     shard, shards = map(int, args.shard.split("/"))
-    run_id = f"{'r2' if args.chord else 'r1b' if args.bundle else 'r1' if args.neurons else 'r0'}_{args.model.split('/')[-1]}_{time.strftime('%Y%m%d-%H%M%S')}"
+    kind = 'r2' if args.chord else 'r1b' if args.bundle else 'r1' if args.neurons else 'r0'
+    if args.frame:  # E5: name the run by its rung and arm
+        kind = f"e5-{args.frame}-{'paste' if args.paste_thinking else 'keep' if args.keep_thinking else 'drop'}"
+    run_id = f"{kind}_{args.model.split('/')[-1]}_{time.strftime('%Y%m%d-%H%M%S')}"
     if shards > 1:
         run_id += f"_s{shard}of{shards}"
     out_path = ROOT / "runs" / f"{run_id}.jsonl"
@@ -173,7 +187,7 @@ def main():
     live.mkdir(parents=True, exist_ok=True)
     (live / "meta.json").write_text(json.dumps({
         "run": run_id, "model": args.model, "layer": layer, "alpha": args.alpha, "dose": dose, "window": args.window,
-        "neurons": args.neurons, "bundle": args.bundle, "chord": args.chord, "atlas_poles": atlas_poles, "steer_tokens": args.steer_tokens, "steer_reply": args.steer_reply, "thinking": args.thinking, "keep_thinking": args.keep_thinking, "hyperparams": hp, "episodes": args.episodes, "shard": args.shard, "batch": args.batch, "reuse_cache": args.reuse_cache,
+        "neurons": args.neurons, "bundle": args.bundle, "chord": args.chord, "atlas_poles": atlas_poles, "steer_tokens": args.steer_tokens, "steer_reply": args.steer_reply, "thinking": args.thinking, "keep_thinking": args.keep_thinking, "group": args.group, "arm": kind, "frame": args.frame, "no_passage": episode.NO_PASSAGE, "system": episode.SYSTEM, "paste_thinking": episode.PASTE_THINKING, "hyperparams": hp, "episodes": args.episodes, "shard": args.shard, "batch": args.batch, "reuse_cache": args.reuse_cache,
         "started": time.time()}))
 
     def start(ep):
