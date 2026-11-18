@@ -18,6 +18,9 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import quote, unquote
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import live_grid  # noqa: E402
+
 SAFE = re.compile(r"^[A-Za-z0-9._-]+$")
 
 
@@ -458,8 +461,19 @@ def make_handler(root, token=None):
     class H(BaseHTTPRequestHandler):
         set_cookie = False
 
-        def _send(self, code, body):
-            if self.set_cookie:  # the token also rides on every link, for browsers that drop the cookie (Safari)
+        def _json(self, obj):
+            data = json.dumps(obj).encode("utf-8")
+            self.send_response(200)
+            if self.set_cookie:
+                self.send_header("Set-Cookie", f"k={token}; Path=/; Max-Age=2592000; HttpOnly; Secure; SameSite=Lax")
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(data)
+
+        def _send(self, code, body, keep=True):
+            if self.set_cookie and keep:  # the token also rides on every link, for browsers that drop the cookie (Safari)
                 body += KEEP_TOKEN
             data = body.encode("utf-8")
             self.send_response(code)
@@ -488,6 +502,19 @@ def make_handler(root, token=None):
                 return self._send(403, page("forbidden", "<p>forbidden</p>"))
             try:
                 if path in ("/", ""):
+                    return self._send(200, live_grid.PAGE, keep=False)
+                if path == "/api/state":
+                    qs = dict(kv.partition("=")[::2] for kv in self.path.partition("?")[2].split("&") if kv)
+                    return self._json(live_grid.state(root, BLIND, unquote(qs["x"]) if qs.get("x") else None))
+                if path == "/info":
+                    return self._json({})
+                if path == "/api/ep":
+                    qs = dict(kv.partition("=")[::2] for kv in self.path.partition("?")[2].split("&") if kv)
+                    run, ep = unquote(qs.get("run", "")), qs.get("ep", "")
+                    if SAFE.match(run) and run not in (".", "..") and ep.isdigit():
+                        return self._json(live_grid.episode(root, run, int(ep), BLIND))
+                    return self._send(404, page("not found", "<p>not found</p>"))
+                if path == "/runs":
                     return self._send(200, render_index(root))
                 if path == "/now":
                     return self._send(200, render_now(root))

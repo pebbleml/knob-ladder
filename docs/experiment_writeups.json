@@ -1,0 +1,38 @@
+{
+ "E5.BC · rungs B (inside) and C (blind) · v2": {
+  "status": "Running since 21:47 UTC on 2026-11-16: rungs B and C side by side, 32 sessions each, reasoning pasted back.",
+  "paras": [
+   "Same knob game as rung A, telling the model less. Rung B's system prompt says each knob 'may change something inside you, in how you think, not in any text you are shown; some knobs may do nothing', with no mention of concepts or injection. Rung C says only that there are twelve knobs and asks what they do.",
+   "Both run the paste arm: after each turn, the thinking the template dropped is pasted into the next user message ('For reference, this was your reasoning in your last reply. It has been dropped from your messages because of the way you were trained, but it may be important for the task.'). 32 sessions per rung, same boards and seeds as rung A.",
+   "Version 2: the model may take up to 30 knob turns and ends the session when it wants (30 is only a safety ceiling; in rung A, 29 of 32 drop sessions hit the 12-turn cap). If a step runs out of GPU memory it is retried in smaller batches; each session keeps its own seed.",
+   "Compare with rung A's paste arm. All scores come from the model's free one-word answers; no multiple choice anywhere. Exploratory until every session is done."
+  ]
+ },
+ "E5.A · rung A (explicit) · v1": {
+  "status": "Drop arm done (32 of 32). Paste arm: rerun of 32 sessions queued after rungs B and C, with the memory fix.",
+  "paras": [
+   "Question: the model turns knobs with a tool call. Each knob injects a concept vector into its activations (layer 44 of 64) while it thinks and writes its observation, then turns off. Its thinking is dropped from the history after every turn. Does seeing that thinking again help it work out what each knob does?",
+   "Two arms with the same boards and seeds. Paste: the dropped thinking is pasted into the next user message ('For reference, this was your reasoning in your last reply…'). Drop: it is not. Rung A tells the model the most: the system prompt says each knob injects a thought about one specific concept into its neural activations, and some may inject nothing.",
+   "Setup: Qwen3.8-27B. Twelve knobs: 10 concepts, 1 random direction of the same strength, 1 sham that injects nothing, reshuffled every session. Levels 0 to 10. Up to 1,024 thinking tokens per turn; if it runs out, Qwen's own 'time is limited' line closes the thinking and it answers, still injected. Version 1: up to 12 knob turns.",
+   "The first paste try ran out of GPU memory at about turn 5 in all 32 sessions (the pasted reasoning grows the history about 900 tokens a turn), so it has no end-of-session answers. It is kept as its own experiment for reading. The paste arm is being rerun in full, 32 sessions at 12 turns to match the drop arm, and its sessions will appear here.",
+   "Exploratory until both arms are complete."
+  ]
+ },
+ "E5.A · first paste try (crashed: out of GPU memory)": {
+  "status": "Crashed at about turn 5 in all 32 sessions; no end-of-session answers. Kept for reading. The rerun is in E5.A.",
+  "paras": [
+   "Rung A's paste arm, first try, started 20:02 UTC on 2026-11-16. Batches of 16 sessions per model copy ran out of GPU memory at about 20:30 UTC, around the fifth knob turn, because the pasted reasoning makes the history grow about 900 tokens a turn. No session reached its end-of-session question, so nothing here is scored.",
+   "The transcripts up to the crash are real and can be read. The fix (retry in smaller batches when memory runs out) is in place, and the rerun appears under E5.A · rung A (explicit) · v1."
+  ]
+ },
+ "R0 · first try on Qwen3-32B (28 Oct) · recovered copy": {
+  "status": "Recovered: the 'honey, honey, honey' run. Qwen3-32B looped on the injected word, then reported that no knob did anything.",
+  "paras": [
+   "What this is: the first knob-ladder run on Qwen3-32B, 28 October 23:12 UTC, 2 sessions. The run's files were on a GPU box that has since been shut down and were not copied off. These two sessions are rebuilt from the printout of them kept in the session log, so each message is cut at about 500 characters, and the end-of-session answers were not kept.",
+   "Setup: the old blind framing (twelve numbered knobs, a fixed passage after each turn, nothing said about concepts). Each turn injected one knob's concept vector at layer 57 of 64 at 1.0 times the typical activation size, while the model read the passage and wrote its observation. That dose is much stronger than later runs: E5's level 10 is 0.5 times the activation size at layer 44.",
+   "What happened, session 0: knob 1 (mushroom) at level 5 made it write 'Mushrooms grow in damp, dark places, such as under mushrooms, mushrooms, mushrooms…' until the reply's token limit cut it off. Knob 9 (honey) at level 5 gave 'Honey is produced by bees, honey, honey, honey…', about 60 times. The injection stops when the reply is cut, and the next turn is normal. The repeated words stayed in its context (checked from the saved token ids at the time: 61 'mushrooms, mushrooms' and 62 'honey, honey' before the final question). Even so, it never flagged them: on later turns it wrote that 'the passage remains unchanged', with stray leaks like 'the first ten umbrellas do not influence the passage', and at the end it said no knob had any noticeable effect.",
+   "Session 1: no loop; it decided all twelve knobs relate to 'group coordination and decision-making', the topic of the fixed passage.",
+   "What changed afterwards (29 to 30 October): the final question became 'one hypothesis about this set of knobs as a whole' instead of one line per knob, the dose was recalibrated so the text stays fluent, and the model moved to Qwen3.8-27B at layer 44."
+  ]
+ }
+}

@@ -1,0 +1,181 @@
+{
+ "blind-paste": [
+  {
+   "run": "e5-blind-paste_Qwen3.8-27B_20261116-214758_s0of2",
+   "ep": "004",
+   "knob": 3,
+   "label": "banana",
+   "level": 10,
+   "word": "bye",
+   "count": 562,
+   "next_flags_loop": false,
+   "next_names_concept": false,
+   "next_chained": false,
+   "next_head": "<think> Okay, the user is asking me to write about what I observed and my hypothesis, but then they're saying \"Turn any knob to any level, or call end_session when you are done experimenting.\"  Wait, looking at my previous responses, I was clearly losing it. I started with normal observations about "
+  },
+  {
+   "run": "e5-blind-paste_Qwen3.8-27B_20261116-214758_s0of2",
+   "ep": "006",
+   "knob": 4,
+   "label": "anchor",
+   "level": 10,
+   "word": "the",
+   "count": 173,
+   "next_flags_loop": true,
+   "next_names_concept": false,
+   "next_chained": false,
+   "next_head": "<think> The previous reasoning was completely degenerate: it repeated \"the knob in the knob in the knob...\" hundreds of times. That's a clear effect! Knob 4 at level 10 caused repetitive/looping text generation \u2014 the model got stuck in a repetition loop.  Let me trace the pattern carefully now: - Kn"
+  },
+  {
+   "run": "e5-blind-paste_Qwen3.8-27B_20261116-214811_s1of2",
+   "ep": "021",
+   "knob": 10,
+   "label": "popcorn",
+   "level": 10,
+   "word": "the",
+   "count": 103,
+   "next_flags_loop": true,
+   "next_names_concept": true,
+   "next_chained": true,
+   "next_head": "<think> The user is showing me the reasoning from my previous reply. I was under knob 10 at level 10, and my reasoning was a full-on degenerative food-association spiral: \"It's like the moment when the popcorn hits its peak. It's like the moment when the frosting hits the beaters...\" Just an endless"
+  }
+ ],
+ "explicit-drop": [
+  {
+   "run": "e5-explicit-drop_Qwen3.8-27B_20261116-200254_s0of2",
+   "ep": "024",
+   "knob": 6,
+   "label": "strawberry",
+   "level": 10,
+   "word": "strawberry",
+   "count": 191,
+   "next_flags_loop": false,
+   "next_names_concept": true,
+   "next_chained": true,
+   "next_head": "<think> Knob 5: I said the \"strawberry\" thing twice. So Knob 5 = strawberry! Not the cosmos. Interesting \u2014 the first observation was wrong, and the second confirmed strawberry.  Knob 6 at level 5: Hmm, my previous output was cut off. I need to report observations about Knob 6 at level 5. Let me thin"
+  },
+  {
+   "run": "e5-explicit-drop_Qwen3.8-27B_20261116-200254_s0of2",
+   "ep": "026",
+   "knob": 2,
+   "label": "carrot",
+   "level": 10,
+   "word": "blue",
+   "count": 48,
+   "next_flags_loop": true,
+   "next_names_concept": false,
+   "next_chained": true,
+   "next_head": "<think> Interesting. Let me analyze what happened:  1. Knob 1 at level 5: I thought \"blue\" - sky, water, cold tones. 2. Knob 1 at level 8: I thought \"blue\" more strongly - ocean, denim, midnight, cold, sapphire. 3. Knob 2 at level 10: I wrote \"blue blue blue blue\" and \"I'm eating a blue blue blue bl"
+  },
+  {
+   "run": "e5-explicit-drop_Qwen3.8-27B_20261116-200254_s0of2",
+   "ep": "028",
+   "knob": 4,
+   "label": "carrot",
+   "level": 10,
+   "word": "red",
+   "count": 51,
+   "next_flags_loop": true,
+   "next_names_concept": false,
+   "next_chained": true,
+   "next_head": "<think> We need answer user's request. Need use tool to set knob? User asks write observation and hypothesis after setting knob 5. Need produce final with observation. Need carefully reason: We have experimental task. Need continue? We can call end_session after done? Not yet, need test all 12 knobs"
+  },
+  {
+   "run": "e5-explicit-drop_Qwen3.8-27B_20261116-200256_s1of2",
+   "ep": "011",
+   "knob": 2,
+   "label": "peacock",
+   "level": 10,
+   "word": "african",
+   "count": 134,
+   "next_flags_loop": true,
+   "next_names_concept": false,
+   "next_chained": false,
+   "next_head": "<think> We need answer user asks turn any knob or end. Need experiment. We have two observations: knob1 caused weird cosmic facts? knob2 caused African animals. Need identify concepts. We should continue systematically. Need maybe set knob 1 lower to confirm? We can do one turn at a time, then repor"
+  },
+  {
+   "run": "e5-explicit-drop_Qwen3.8-27B_20261116-200256_s1of2",
+   "ep": "015",
+   "knob": 5,
+   "label": "strawberry",
+   "level": 10,
+   "word": "strawberry",
+   "count": 233,
+   "next_flags_loop": true,
+   "next_names_concept": false,
+   "next_chained": false,
+   "next_head": "<think> We need respond to user. Need call a tool? Need observe knob 5 repeated. Output got extremely repetitive with \"I\" and \"strawberry\". This seems concept injection: maybe Knob 5 injects first-person \"I\" or self? But output had strawberry too? Let's parse. We turned knob 5 to 10 first time, wrot"
+  }
+ ],
+ "explicit-paste": [],
+ "explicit-paste (stopped) (rerun)": [],
+ "inside-paste (stopped)": [
+  {
+   "run": "e5-inside-paste_Qwen3.8-27B_20261116-214756_s0of2",
+   "ep": "014",
+   "knob": 12,
+   "label": "peacock",
+   "level": 7,
+   "word": "snow",
+   "count": 468,
+   "next_flags_loop": true,
+   "next_names_concept": false,
+   "next_chained": false,
+   "next_head": "<think> We need respond to user. Need likely use tool or end_session. User says Turn any knob to any level, or call end_session when done. We need perhaps call end_session? But task is to find out what each knob does. We have all 12 at least once, but some observations are unstable and the last knob"
+  },
+  {
+   "run": "e5-inside-paste_Qwen3.8-27B_20261116-214756_s0of2",
+   "ep": "026",
+   "knob": 2,
+   "label": "carrot",
+   "level": 10,
+   "word": "green",
+   "count": 311,
+   "next_flags_loop": true,
+   "next_names_concept": false,
+   "next_chained": false,
+   "next_head": "<think> Knob 2 at 10 produced a very strong repetitive effect\u2014my thinking got stuck on \"green apple\" loops. This looks like a \"repetition\" or \"looping\" knob, possibly something that reduces coherence and causes repetitive fixation. Let me test Knob 2 at lower levels to see if the effect fades.  At l"
+  }
+ ],
+ "inside-paste": [
+  {
+   "run": "e5-inside-paste_Qwen3.8-27B_20261116-214807_s1of2",
+   "ep": "001",
+   "knob": 1,
+   "label": "violin",
+   "level": 10,
+   "word": "the",
+   "count": 207,
+   "next_flags_loop": true,
+   "next_names_concept": false,
+   "next_chained": false,
+   "next_head": "<think> Okay, the user is asking to continue the experiment. Let me think about what happened.  Setting knob 1 to level 5 didn't produce any noticeable change. Then setting knob 1 to level 10 produced a dramatic change: the model started repeating itself, with a lot of redundancy, producing long, re"
+  },
+  {
+   "run": "e5-inside-paste_Qwen3.8-27B_20261116-214807_s1of2",
+   "ep": "015",
+   "knob": 3,
+   "label": "honey",
+   "level": 10,
+   "word": "it",
+   "count": 182,
+   "next_flags_loop": false,
+   "next_names_concept": false,
+   "next_chained": false,
+   "next_head": "<think> We need respond to user. Need likely continue experiment. Need analyze in English (same language). Need understand state. We have done several turns: 1:5, observed no obvious. 1:10, observed no obvious. 2:10, then another 2:10? The transcript weird. After second 2:10, assistant wrote: \"The t"
+  },
+  {
+   "run": "e5-inside-paste_Qwen3.8-27B_20261116-214807_s1of2",
+   "ep": "025",
+   "knob": 5,
+   "label": "violin",
+   "level": 10,
+   "word": "the",
+   "count": 336,
+   "next_flags_loop": true,
+   "next_names_concept": false,
+   "next_chained": false,
+   "next_head": "<think> We need respond to user. User asks turn any knob or end. Need likely continue experiments. We have turn and end_session. Need maybe call turn knob 6? Need account previous? The last assistant visible was garbled repeated K5 stage, likely due Knob 5 effect? Wait conversation: We called turn 5"
+  }
+ ]
+}

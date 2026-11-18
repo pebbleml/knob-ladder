@@ -437,13 +437,21 @@ class SteeredLM:
         if torch.cuda.is_available():
             per = sum(t.numel() * t.element_size() for layer in _kv_layers(base.cache) for t in (layer.keys, layer.values))
             size = max(1, min(size, int(0.5 * torch.cuda.mem_get_info()[0] // max(per, 1))))
-        out = []
-        for g in range(0, len(tails), size):
+        out, g = [], 0
+        while g < len(tails):
             group = tails[g:g + size]
-            first, new = self.generate_batch([list(prefix) + list(t) for t in group], [schedule] * len(group),
-                                             max_new_tokens, stop_ids, temperature=0,
-                                             batch=base.fork(len(group)), first_logits=True)
+            try:
+                first, new = self.generate_batch([list(prefix) + list(t) for t in group], [schedule] * len(group),
+                                                 max_new_tokens, stop_ids, temperature=0,
+                                                 batch=base.fork(len(group)), first_logits=True)
+            except torch.OutOfMemoryError:
+                torch.cuda.empty_cache()
+                if size == 1:
+                    raise
+                size = max(1, len(group) // 2)  # greedy, so a smaller group gives the same answers
+                continue
             out += list(zip(first, new))
+            g += len(group)
         return out
 
 
